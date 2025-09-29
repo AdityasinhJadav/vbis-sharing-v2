@@ -1,0 +1,37 @@
+@import 'tailwindcss';
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Clash+Display:wght@600;700&display=swap');
+
+:root {
+  --fm-heading: 'Clash Display', ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+  --fm-body: 'Inter', ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial;
+}
+
+* { font-family: var(--fm-body); }
+html, body, #root { height: 100%; }
+body { background-color: #0f172a; }
+
+.fm-hero-title { font-family: var(--fm-heading); }
+
+@keyframes floatUp {
+  0% { transform: translateY(8px); opacity: .0 }
+  100% { transform: translateY(0); opacity: 1 }
+}
+
+@keyframes subtlePulse {
+  0%,100% { opacity: .9 }
+  50% { opacity: 1 }
+}
+
+.animate-floatUp { animation: floatUp .7s ease-out both }
+.animate-delay-1 { animation-delay: .1s }
+.animate-delay-2 { animation-delay: .2s }
+.animate-delay-3 { animation-delay: .3s }
+.animate-subtlePulse { animation: subtlePulse 3s ease-in-out infinite }
+
+.fm-radial-bg {
+  background:
+    radial-gradient(600px 300px at 20% 10%, rgba(99,102,241,.15), transparent 60%),
+    radial-gradient(600px 300px at 80% 20%, rgba(168,85,247,.12), transparent 60%),
+    radial-gradient(600px 300px at 50% 90%, rgba(14,165,233,.10), transparent 60%);
+}
