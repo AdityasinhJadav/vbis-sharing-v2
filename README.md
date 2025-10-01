@@ -100,7 +100,7 @@ Notes:
 
 Location: `flask-backend/`
 
-Docs: see `flask-backend/README_ADVANCED.md`.
+Docs: see `flask-backend/README_ADVANCED.md` and `flask-backend/README_V2.md` (ArcFace + FAISS).
 
 Quick run:
 ```
@@ -111,9 +111,14 @@ python run_advanced.py
 ```
 
 Primary API (examples):
-- `POST /api/face/analyze` – analyze uploaded image
-- `POST /api/face/analyze-url` – analyze by image URL
-- `POST /api/face/match` – match a user descriptor against a collection
+- V1 (legacy)
+  - `POST /api/face/analyze` – analyze uploaded image (128‑dim)
+  - `POST /api/face/analyze-url` – analyze by image URL
+  - `POST /api/face/match` – match a user descriptor against a collection
+- V2 (industry-grade, ArcFace + FAISS)
+  - `POST /api/v2/analyze` – returns 512‑dim ArcFace embedding for an uploaded image
+  - `POST /api/v2/ingest` – ingests a photo (indexes all faces per photo) for fast search
+  - `POST /api/v2/match` – fast cosine similarity search over FAISS index
 
 Troubleshooting (Windows):
 - If `dlib` build fails, install Visual C++ Build Tools, then retry.
@@ -127,6 +132,7 @@ Location: `frontend/`
 Environment:
 - `VITE_API_BASE` points to the Node API base (default `http://localhost:4000/api`).
 - The frontend also integrates with the Flask service at `http://localhost:5000/api` via `frontend/src/utils/flaskFaceApi.js`.
+- V2 flow (fast matching): the frontend sends the user image to `/api/v2/analyze` to get a real ArcFace embedding, then queries `/api/v2/match`.
 
 Development:
 ```
@@ -143,8 +149,8 @@ npm run dev
 3) Start frontend dev server on port 5173
 
 In the app:
-- Organizer signs up/logs in, creates a room, uploads reference photos
-- Attendee uploads a selfie; matching is performed against reference photos
+- Organizer signs up/logs in, creates an event, uploads photos (Cloudinary). Ingest runs and indexes all faces per photo in FAISS.
+- Attendee uploads a selfie; frontend requests ArcFace embedding from `/api/v2/analyze`, then `/api/v2/match` returns fast results. V1 is used as a fallback.
 
 ---
 
@@ -161,6 +167,8 @@ In the app:
 - JWT errors: verify `JWT_SECRET` and that the `Authorization: Bearer <token>` header is sent.
 - Cloudinary upload issues: confirm `CLOUDINARY_*` vars and that the account allows uploads.
 - Flask `dlib`/build errors (Windows): install Visual Studio Build Tools; rerun `install_advanced.py`.
+- V2 analyze 404/500: confirm frontend uses `http://localhost:5000/api/v2/analyze` (see `flaskFaceApi.js`) and Flask is running. A no-face image returns success with `embedding: null`.
+- Low recall: re‑ingest photos so all faces per photo are indexed; lower V2 threshold (0.30–0.35) or use an "expand search" pass with a lower threshold.
 
 ---
 
@@ -186,5 +194,8 @@ Frontend (`frontend/package.json`):
 
 ## License
 This project is provided as-is for demonstration and educational purposes.
+
+
+
 
 
