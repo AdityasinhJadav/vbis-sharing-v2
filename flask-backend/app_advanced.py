@@ -9,6 +9,7 @@ import os
 from dotenv import load_dotenv
 import logging
 from face_recognition_advanced import advanced_face_service
+from insightface_faiss_service import insightface_faiss_service
 
 # Load environment variables
 load_dotenv()
@@ -36,7 +37,8 @@ def health_check():
         'version': '2.0.0',
         'face_recognition_ready': face_service.initialized,
         'model_type': 'deep_learning_cnn',
-        'accuracy_level': 'industrial_grade'
+        'accuracy_level': 'industrial_grade',
+        'insightface_ready': insightface_faiss_service.initialized
     })
 
 @app.route('/api/face/analyze', methods=['POST'])
@@ -204,6 +206,75 @@ def match_faces():
             'success': False,
             'message': str(e)
         }), 500
+
+
+@app.route('/api/v2/analyze', methods=['POST'])
+def v2_analyze():
+    """Analyze user image and return ArcFace embedding for V2 matching."""
+    try:
+        if 'image' not in request.files:
+            return jsonify({'success': False, 'message': 'image file is required'}), 400
+
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({'success': False, 'message': 'no image selected'}), 400
+
+        embedding = insightface_faiss_service.get_face_embedding(file)
+
+        if embedding is None:
+            # Return 200 with explicit no-face info so frontend can handle gracefully
+            return jsonify({
+                'success': True,
+                'embedding': None,
+                'dimension': 0,
+                'message': 'No faces found in the image. Please ensure a clear, front-facing face with good lighting.'
+            })
+
+        return jsonify({
+            'success': True,
+            'embedding': embedding.tolist(),
+            'dimension': len(embedding),
+            'message': 'ArcFace embedding extracted successfully'
+        })
+
+    except Exception as e:
+        logger.error(f"v2 analyze error: {e}")
+        return jsonify({'success': False, 'message': 'Internal error during analysis'}), 500
+
+@app.route('/api/v2/ingest', methods=['POST'])
+def v2_ingest():
+    """Ingest a photo (compute ArcFace embedding and add to FAISS), given event_id and either image_url or embedding."""
+    try:
+        data = request.get_json()
+        event_id = data.get('event_id')
+        photo_id = data.get('photo_id')
+        image_url = data.get('image_url')
+        embedding = data.get('embedding')
+        if not event_id or not photo_id:
+            return jsonify({'success': False, 'message': 'event_id and photo_id are required'}), 400
+        ok = insightface_faiss_service.ingest(event_id, photo_id, image_url=image_url, embedding=embedding)
+        return jsonify({'success': bool(ok)})
+    except Exception as e:
+        logger.error(f"v2 ingest error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/v2/match', methods=['POST'])
+def v2_match():
+    """Match a user embedding against the FAISS index of an event (ArcFace)."""
+    try:
+        data = request.get_json()
+        event_id = data.get('event_id')
+        user_embedding = data.get('user_embedding')
+        top_k = int(data.get('top_k', 20))
+        threshold = float(data.get('threshold', 0.35))
+        if not event_id or not isinstance(user_embedding, list):
+            return jsonify({'success': False, 'message': 'event_id and user_embedding are required'}), 400
+        matches = insightface_faiss_service.match(event_id, user_embedding, top_k=top_k, threshold=threshold)
+        return jsonify({'success': True, 'matches': matches, 'top_k': top_k, 'threshold_used': threshold})
+    except Exception as e:
+        logger.error(f"v2 match error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/face/compare', methods=['POST'])
 def compare_faces():

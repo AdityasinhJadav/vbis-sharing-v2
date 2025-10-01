@@ -7,6 +7,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { FaEnvelope, FaLock, FaGoogle, FaEye, FaEyeSlash, FaArrowRight } from 'react-icons/fa';
 import { useTheme } from '../theme/ThemeContext';
+import { setRoleInStorage, logRoleInfo, getDefaultRole } from '../utils/roleUtils';
 
 const AuthLogin = () => {
   const { isLight } = useTheme();
@@ -26,19 +27,34 @@ const AuthLogin = () => {
     }
   };
 
-  const upsertUserRoleBestEffort = async (user, preferredRole = 'attendee') => {
+  const upsertUserRoleBestEffort = async (user) => {
     try {
       const userRef = doc(db, 'users', user.uid);
       const userDoc = await getDoc(userRef);
-      let userRole = preferredRole;
+      let userRole = getDefaultRole(); // Default fallback
+      
       if (userDoc.exists()) {
-        userRole = userDoc.data().role || preferredRole;
+        // User exists - use their stored role
+        userRole = userDoc.data().role || getDefaultRole();
+        logRoleInfo('Login - Existing User', userRole, user.email);
       } else {
-        await setDoc(userRef, { email: user.email || '', role: userRole, createdAt: new Date() }, { merge: true });
+        // New user - default to attendee and create document
+        userRole = getDefaultRole();
+        await setDoc(userRef, { 
+          email: user.email || '', 
+          role: userRole, 
+          createdAt: new Date() 
+        }, { merge: true });
+        logRoleInfo('Login - New User', userRole, user.email);
       }
-      localStorage.setItem('role', userRole);
-    } catch (_) {
-      localStorage.setItem('role', preferredRole);
+      // Store role per user in sessionStorage to avoid cross-tab bleed
+      sessionStorage.setItem(`role:${user.uid}`, userRole);
+    } catch (error) {
+      console.error('Error fetching user role:', error);
+      // Fallback to attendee on error
+      const fallbackRole = getDefaultRole();
+      sessionStorage.setItem(`role:${user.uid}`, fallbackRole);
+      logRoleInfo('Login - Error Fallback', fallbackRole, user.email);
     }
   };
 

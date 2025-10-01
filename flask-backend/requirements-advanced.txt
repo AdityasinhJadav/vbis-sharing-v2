@@ -11,6 +11,9 @@ dlib>=19.24.0
 opencv-python>=4.5.0
 numpy>=1.21.0,<2.0.0
 scikit-learn>=1.0.0
+insightface>=0.7.3
+onnxruntime>=1.18.0
+faiss-cpu>=1.7.4
 
 # Image processing
 imageio>=2.19.0

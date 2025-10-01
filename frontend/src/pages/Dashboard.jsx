@@ -1,12 +1,15 @@
 import React, { useContext, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { FaCrown, FaUsers, FaPlus, FaCalendarAlt, FaEye, FaCode, FaSignOutAlt, FaUserCircle, FaUpload, FaTrash, FaTrashAlt, FaSearch } from 'react-icons/fa';
+import { FaCrown, FaUsers, FaPlus, FaCalendarAlt, FaEye, FaCode, FaSignOutAlt, FaUserCircle, FaUpload, FaTrash, FaTrashAlt, FaSearch, FaCog } from 'react-icons/fa';
 import { AuthContext } from '../auth/AuthContext';
 import { auth, db } from '../firebase';
 import { signOut } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
 import { collection, query, where, limit, onSnapshot, doc, getDoc, setDoc, serverTimestamp, addDoc, getDocs, writeBatch, deleteDoc } from 'firebase/firestore';
 import { useTheme } from '../theme/ThemeContext';
+import { generateUniquePasscode, validatePasscode, checkPasscodeAvailability } from '../utils/eventUtils';
+import { flaskFaceService } from '../utils/flaskFaceApi';
+import { quickBulkIngest } from '../utils/quickBulkIngest';
 
 const Dashboard = () => {
   const { isLight } = useTheme();
@@ -28,43 +31,94 @@ const Dashboard = () => {
   const [newEventPasscode, setNewEventPasscode] = useState('');
 
   useEffect(() => {
-    const fetchUserRole = async () => {
-      if (!currentUser) return;
-      
-      // First try to get role from localStorage
-      let role = localStorage.getItem('role');
-      
-      // If no role in localStorage, fetch from Firestore
-      if (!role) {
-        try {
-          const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-          if (userDoc.exists()) {
-            role = userDoc.data().role || 'attendee';
-            localStorage.setItem('role', role);
-          } else {
-            role = 'attendee'; // default fallback
-            localStorage.setItem('role', role);
-          }
-        } catch (error) {
-          console.error('Error fetching user role:', error);
-          role = 'attendee'; // fallback on error
-          localStorage.setItem('role', role);
-        }
+    if (!currentUser) return;
+    console.log('Dashboard: Subscribing to role for user:', currentUser.email);
+    const unsubscribe = onSnapshot(
+      doc(db, 'users', currentUser.uid),
+      (snap) => {
+        const role = (snap.exists() ? snap.data().role : undefined) || 'attendee';
+        console.log('Dashboard: Role from Firestore snapshot:', role);
+        setUserRole(role);
+      },
+      (err) => {
+        console.error('Dashboard: Role subscription error:', err);
+        setUserRole('attendee');
       }
-      
-      setUserRole(role);
-    };
-    
-    fetchUserRole();
+    );
+    return () => unsubscribe();
   }, [currentUser]);
 
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      localStorage.removeItem('role');
+      setUserRole(null);
       navigate('/login');
     } catch (error) {
       console.error('Logout error:', error);
+    }
+  };
+
+  const refreshUserRole = async () => {
+    if (!currentUser) return;
+    
+    try {
+      const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+      if (userDoc.exists()) {
+        const role = userDoc.data().role || 'attendee';
+        localStorage.setItem('role', role);
+        setUserRole(role);
+        console.log('Role refreshed:', role);
+      }
+    } catch (error) {
+      console.error('Error refreshing role:', error);
+    }
+  };
+
+  const bulkIngestEventPhotos = async (eventId) => {
+    try {
+      console.log(`🔄 Starting bulk ingest for event ${eventId}...`);
+      
+      // Get all photos for this event
+      const photosQuery = query(collection(db, 'photos'), where('event_id', '==', eventId));
+      const photosSnapshot = await getDocs(photosQuery);
+      
+      if (photosSnapshot.empty) {
+        console.log('No photos found for this event');
+        return;
+      }
+      
+      const photos = photosSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log(`Found ${photos.length} photos to ingest`);
+      
+      let successCount = 0;
+      let failCount = 0;
+      
+      for (const photo of photos) {
+        try {
+          const ingestResult = await flaskFaceService.api.ingestPhoto(
+            eventId,
+            photo.id,
+            photo.cloudinaryUrl
+          );
+          
+          if (ingestResult.success) {
+            successCount++;
+            console.log(`✅ Ingested photo: ${photo.originalName}`);
+          } else {
+            failCount++;
+            console.warn(`⚠️ Failed to ingest photo: ${photo.originalName}`);
+          }
+        } catch (error) {
+          failCount++;
+          console.error(`❌ Error ingesting photo ${photo.originalName}:`, error);
+        }
+      }
+      
+      console.log(`🎉 Bulk ingest completed: ${successCount} success, ${failCount} failed`);
+      return { success: successCount, failed: failCount, total: photos.length };
+    } catch (error) {
+      console.error('Bulk ingest error:', error);
+      throw error;
     }
   };
 
@@ -109,6 +163,35 @@ const Dashboard = () => {
             <div>
               <h3 className={`text-lg font-semibold ${isLight ? 'text-slate-900' : 'text-white'}`}>Upload Photos</h3>
               <p className={`${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Add photos to your events</p>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          whileHover={{ scale: 1.05 }}
+          onClick={async () => {
+            try {
+              console.log('🔄 Starting bulk ingest...');
+              const result = await quickBulkIngest();
+              if (result.totalSuccess > 0) {
+                alert(`✅ Bulk ingest completed! ${result.totalSuccess} photos are now ready for face matching.`);
+              } else {
+                alert('⚠️ No photos were ingested. Check console for details.');
+              }
+            } catch (error) {
+              console.error('Bulk ingest error:', error);
+              alert('❌ Bulk ingest failed. Check console for details.');
+            }
+          }}
+          className={`rounded-xl p-6 cursor-pointer transition-all border ${isLight ? 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-lg' : 'bg-slate-800 border-slate-700 hover:border-blue-400 hover:shadow-xl'}`}
+        >
+          <div className="flex items-center space-x-4">
+            <div className={`${isLight ? 'bg-blue-500/10' : 'bg-blue-500/20'} p-3 rounded-lg`}>
+              <FaCog className={`h-6 w-6 ${isLight ? 'text-blue-600' : 'text-blue-400'}`} />
+            </div>
+            <div>
+              <h3 className={`text-lg font-semibold ${isLight ? 'text-slate-900' : 'text-white'}`}>Bulk Ingest Photos</h3>
+              <p className={`${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Process existing photos for face matching</p>
             </div>
           </div>
         </motion.div>
@@ -345,11 +428,20 @@ const Dashboard = () => {
                     setCreating(false);
                     return;
                   }
-                  if (!/^[A-Z0-9]{4,10}$/.test(pass)) {
+                  if (!validatePasscode(pass)) {
                     setCreateError('Passcode must be 4-10 uppercase letters or digits.');
                     setCreating(false);
                     return;
                   }
+                  
+                  // Check if passcode already exists
+                  const isAvailable = await checkPasscodeAvailability(pass, db);
+                  if (!isAvailable) {
+                    setCreateError('This passcode is already in use. Please choose a different one.');
+                    setCreating(false);
+                    return;
+                  }
+
                   const payload = {
                     eventName: name,
                     eventDate: newEventDate || null,
@@ -407,20 +499,34 @@ const Dashboard = () => {
                 maxLength={160}
               />
               <div className="mb-4">
-                <input
-                  type="text"
-                  placeholder="Passcode (required, 4-10 A-Z/0-9)"
-                  className={`w-full rounded-xl px-4 py-3 focus:ring-2 transition ${
-                    isLight ? 'bg-white border border-slate-300 focus:ring-purple-400 focus:border-purple-400 text-slate-900 placeholder-slate-500' : 'bg-slate-700/50 border border-slate-600/50 focus:ring-purple-400 focus:border-purple-400 text-white placeholder-slate-400'
-                  }`}
-                  value={newEventPasscode}
-                  onChange={(e) => setNewEventPasscode(e.target.value.toUpperCase())}
-                  disabled={creating}
-                  maxLength={10}
-                  required
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Passcode (required, 4-10 A-Z/0-9)"
+                    className={`flex-1 rounded-xl px-4 py-3 focus:ring-2 transition ${
+                      isLight ? 'bg-white border border-slate-300 focus:ring-purple-400 focus:border-purple-400 text-slate-900 placeholder-slate-500' : 'bg-slate-700/50 border border-slate-600/50 focus:ring-purple-400 focus:border-purple-400 text-white placeholder-slate-400'
+                    }`}
+                    value={newEventPasscode}
+                    onChange={(e) => setNewEventPasscode(e.target.value.toUpperCase())}
+                    disabled={creating}
+                    maxLength={10}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setNewEventPasscode(generateUniquePasscode())}
+                    disabled={creating}
+                    className={`px-4 py-3 rounded-xl font-medium transition ${
+                      isLight 
+                        ? 'bg-purple-100 text-purple-700 hover:bg-purple-200 border border-purple-300' 
+                        : 'bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border border-purple-500/30'
+                    }`}
+                  >
+                    Generate
+                  </button>
+                </div>
                 <p className={`mt-1 text-xs ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
-                  Use only A-Z and 0-9, length 4 to 10.
+                  Use only A-Z and 0-9, length 4 to 10. Click Generate for a random code.
                 </p>
               </div>
               <div className="flex justify-end gap-2">

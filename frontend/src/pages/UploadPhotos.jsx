@@ -6,6 +6,7 @@ import { useToast } from "../components/ToastProvider";
 import { useTheme } from "../theme/ThemeContext";
 import { motion } from "framer-motion";
 import { FaUpload, FaImage, FaArrowLeft, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
+import { flaskFaceService } from '../utils/flaskFaceApi';
 import { uploadToCloudinary } from "../utils/cloudinary";
 import { collection, addDoc, serverTimestamp, query, where, getDocs } from "firebase/firestore";
 
@@ -157,7 +158,7 @@ export default function UploadPhotos() {
           });
 
           // Save metadata to Firestore
-          await addDoc(collection(db, 'photos'), {
+          const photoDoc = await addDoc(collection(db, 'photos'), {
             cloudinaryPublicId: cloudinaryResponse.public_id,
             cloudinaryUrl: cloudinaryResponse.secure_url,
             originalName: file.name,
@@ -172,6 +173,24 @@ export default function UploadPhotos() {
             width: cloudinaryResponse.width,
             height: cloudinaryResponse.height,
           });
+
+          // Ingest photo into FAISS index for V2 face matching
+          try {
+            console.log(`🔄 Ingesting photo ${i + 1}/${totalFiles} into FAISS index...`);
+            const ingestResult = await flaskFaceService.api.ingestPhoto(
+              eventId,
+              photoDoc.id,
+              cloudinaryResponse.secure_url
+            );
+            if (ingestResult.success) {
+              console.log(`✅ Photo ${i + 1} ingested successfully`);
+            } else {
+              console.warn(`⚠️ Photo ${i + 1} ingestion failed:`, ingestResult);
+            }
+          } catch (ingestError) {
+            console.warn(`⚠️ Failed to ingest photo ${i + 1} into FAISS:`, ingestError);
+            // Don't fail the upload if ingestion fails
+          }
 
           uploadedCount++;
           setUploadProgress(Math.round(((i + 1) / totalFiles) * 100));

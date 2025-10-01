@@ -190,7 +190,7 @@ const ViewPhotos = () => {
       console.log('Got user face descriptor:', descriptor ? 'SUCCESS' : 'FAILED');
       setUserFaceDescriptor(descriptor);
       
-      const matchedPhotos = await flaskFaceService.findMatchingPhotos(descriptor, photos, 0.5);
+      const matchedPhotos = await flaskFaceService.findMatchingPhotos(descriptor, photos, 0.5, imageFile);
       console.log('Face matching results:', matchedPhotos.length, 'matches out of', photos.length, 'photos');
       console.log('Matched photos:', matchedPhotos);
       
@@ -226,7 +226,7 @@ const ViewPhotos = () => {
     }
   };
 
-  // Fetch photos from Firestore
+  // Fetch event info first
   useEffect(() => {
     if (!passcode || !currentUser) return;
 
@@ -244,18 +244,33 @@ const ViewPhotos = () => {
       (snapshot) => {
         if (!snapshot.empty) {
           const eventData = snapshot.docs[0].data();
-          setEventInfo({ id: snapshot.docs[0].id, ...eventData });
+          const eventId = snapshot.docs[0].id;
+          setEventInfo({ id: eventId, ...eventData });
+        } else {
+          setError('Event not found. Please check the passcode.');
+          setLoading(false);
         }
       },
       (err) => {
         console.error('Event fetch error:', err);
+        setError('Failed to load event. Please try again.');
+        setLoading(false);
       }
     );
 
-    // Then get photos (temporarily without orderBy to avoid index requirement)
+    return () => {
+      unsubEvent();
+    };
+  }, [passcode, currentUser]);
+
+  // Fetch photos after event info is available
+  useEffect(() => {
+    if (!eventInfo?.id || !currentUser) return;
+
+    // Get photos using event_id for better uniqueness
     const photosQuery = query(
       collection(db, 'photos'),
-      where('project_passcode', '==', passcode.toUpperCase())
+      where('event_id', '==', eventInfo.id)
     );
 
     const unsubPhotos = onSnapshot(
@@ -285,10 +300,9 @@ const ViewPhotos = () => {
     );
 
     return () => {
-      unsubEvent();
       unsubPhotos();
     };
-  }, [passcode, currentUser]);
+  }, [eventInfo?.id, currentUser]);
 
   // Filter photos based on active tab
   useEffect(() => {

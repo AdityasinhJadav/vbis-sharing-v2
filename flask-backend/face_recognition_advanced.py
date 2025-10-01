@@ -12,6 +12,46 @@ import requests
 import logging
 from typing import List, Dict, Optional, Tuple, Union
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+
+
+class _LRUCache:
+    """Simple in-memory LRU cache with TTL for descriptors keyed by image URL."""
+    def __init__(self, capacity: int = 1000, ttl_seconds: int = 3600):
+        self.capacity = capacity
+        self.ttl = ttl_seconds
+        self.store: Dict[str, Tuple[float, object]] = {}
+        self.order: List[str] = []
+
+    def get(self, key: str):
+        now = time.time()
+        if key in self.store:
+            ts, value = self.store[key]
+            if now - ts <= self.ttl:
+                # refresh order
+                if key in self.order:
+                    self.order.remove(key)
+                self.order.append(key)
+                return value
+            # expired
+            self.delete(key)
+        return None
+
+    def set(self, key: str, value: object):
+        now = time.time()
+        if key in self.store:
+            self.order.remove(key)
+        elif len(self.order) >= self.capacity:
+            evict = self.order.pop(0)
+            self.store.pop(evict, None)
+        self.store[key] = (now, value)
+        self.order.append(key)
+
+    def delete(self, key: str):
+        self.store.pop(key, None)
+        if key in self.order:
+            self.order.remove(key)
 
 
 class AdvancedFaceRecognitionService:
@@ -28,9 +68,11 @@ class AdvancedFaceRecognitionService:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.initialized = False
-        self.face_detection_model = 'hog'  # 'hog' for speed, 'cnn' for accuracy
+        # Default to CNN for better accuracy; can be overridden
+        self.face_detection_model = 'cnn'  # 'hog' for speed, 'cnn' for accuracy
         self.num_jitters = 1  # Number of times to re-sample for encoding
         self.tolerance = 0.6  # Face matching tolerance (lower = stricter)
+        self.descriptor_cache = _LRUCache(capacity=2000, ttl_seconds=3600)
         
     def initialize(self) -> bool:
         """Initialize the advanced face recognition service"""
@@ -104,20 +146,21 @@ class AdvancedFaceRecognitionService:
         """
         face_locations = []
         
-        # Method 1: HOG-based detector (faster)
+        # Prioritize configured model first
         try:
-            locations_hog = face_recognition.face_locations(image_rgb, model='hog')
-            face_locations.extend(locations_hog)
+            primary = face_recognition.face_locations(image_rgb, model=self.face_detection_model)
+            face_locations.extend(primary)
         except Exception as e:
-            self.logger.warning(f"HOG face detection failed: {str(e)}")
+            self.logger.warning(f"Primary face detection ({self.face_detection_model}) failed: {str(e)}")
         
-        # Method 2: CNN-based detector (more accurate) - if no faces found with HOG
+        # Fallback to the other model if no faces found
         if len(face_locations) == 0:
             try:
-                locations_cnn = face_recognition.face_locations(image_rgb, model='cnn')
-                face_locations.extend(locations_cnn)
+                fallback_model = 'hog' if self.face_detection_model == 'cnn' else 'cnn'
+                fallback = face_recognition.face_locations(image_rgb, model=fallback_model)
+                face_locations.extend(fallback)
             except Exception as e:
-                self.logger.warning(f"CNN face detection failed: {str(e)}")
+                self.logger.warning(f"Fallback face detection failed: {str(e)}")
         
         # Method 3: Multi-scale detection if still no faces found
         if len(face_locations) == 0:
@@ -204,7 +247,15 @@ class AdvancedFaceRecognitionService:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
-            response = requests.get(image_url, timeout=30, headers=headers)
+            # If Cloudinary URL without transformation, request a smaller rendition for speed
+            optimized_url = image_url
+            try:
+                if 'res.cloudinary.com' in image_url and '/image/upload/' in image_url and ('/w_' not in image_url):
+                    optimized_url = image_url.replace('/image/upload/', '/image/upload/w_640,q_75,c_limit,fl_lossy/')
+            except Exception:
+                pass
+
+            response = requests.get(optimized_url, timeout=30, headers=headers)
             response.raise_for_status()
             
             image = Image.open(io.BytesIO(response.content))
@@ -295,6 +346,11 @@ class AdvancedFaceRecognitionService:
             List of face encodings (each encoding is a list of 128 floats)
         """
         try:
+            # Cache by URL to avoid repeated downloads/compute in-session
+            cached = self.descriptor_cache.get(image_url)
+            if cached is not None:
+                return cached
+
             image_rgb = self.load_image_from_url(image_url)
             if image_rgb is None:
                 return None
@@ -318,6 +374,7 @@ class AdvancedFaceRecognitionService:
             
             # Convert all encodings to lists
             encodings_list = [encoding.tolist() for encoding in face_encodings]
+            self.descriptor_cache.set(image_url, encodings_list)
             
             return encodings_list
             
@@ -462,24 +519,29 @@ class AdvancedFaceRecognitionService:
             'photo_data': []
         }
         
-        for i, url in enumerate(photo_urls):
+        def _process(idx_url):
+            i, url = idx_url
             try:
                 self.logger.info(f"📷 Processing photo {i+1}/{len(photo_urls)}")
-                
                 descriptors = self.get_face_descriptors_from_url(url)
+                return (True, url, descriptors)
+            except Exception as e:
+                self.logger.warning(f"Failed to process photo {i+1}: {str(e)}")
+                return (False, url, None)
+
+        max_workers = min(8, max(2, (os.cpu_count() or 4)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for ok, url, descriptors in executor.map(_process, list(enumerate(photo_urls))):
                 results['processed'] += 1
-                
-                if descriptors and len(descriptors) > 0:
+                if ok and descriptors and len(descriptors) > 0:
                     results['faces_found'] += 1
                     results['photo_data'].append({
                         'url': url,
                         'descriptors': descriptors,
                         'face_count': len(descriptors)
                     })
-                
-            except Exception as e:
-                results['failed'] += 1
-                self.logger.warning(f"Failed to process photo {i+1}: {str(e)}")
+                elif not ok:
+                    results['failed'] += 1
         
         return results
 

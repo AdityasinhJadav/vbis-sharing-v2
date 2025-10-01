@@ -7,6 +7,7 @@ import { db } from "../firebase";
 import { motion } from "framer-motion";
 import { FaEnvelope, FaLock, FaGoogle, FaEye, FaEyeSlash, FaUserTag, FaArrowRight, FaUsers, FaCrown } from "react-icons/fa";
 import { useTheme } from "../theme/ThemeContext";
+import { setRoleInStorage, logRoleInfo } from '../utils/roleUtils';
 
 export default function Signup() {
   const { isLight } = useTheme();
@@ -46,7 +47,8 @@ export default function Signup() {
         createdAt: new Date()
       });
       
-      localStorage.setItem("role", role);
+      setRoleInStorage(role);
+      logRoleInfo('Signup - Email', role, user.email);
       navigate("/dashboard");
     } catch (err) {
       console.error(err);
@@ -64,14 +66,15 @@ export default function Signup() {
       const userCredential = await signInWithPopup(auth, provider);
       const user = userCredential.user;
       
-      // Store user role in Firestore
+      // Store user role in Firestore (use the selected role from form)
       await setDoc(doc(db, "users", user.uid), {
         email: user.email,
-        role: role || "attendee",
+        role: role, // Use the role state from the form
         createdAt: new Date()
       }, { merge: true });
       
-      localStorage.setItem("role", role || "attendee");
+      setRoleInStorage(role);
+      logRoleInfo('Signup - Google', role, user.email);
       navigate("/dashboard");
     } catch (err) {
       console.error(err);
