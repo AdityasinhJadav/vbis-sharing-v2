@@ -205,7 +205,21 @@ const ViewPhotos = () => {
       }
     } catch (error) {
       console.error('Face matching error:', error);
-      toast.error(error.message || 'Face matching failed - please try a different photo');
+      
+      // Provide specific error messages based on the error type
+      let errorMessage = 'Face matching failed - please try a different photo';
+      
+      if (error.message && error.message.includes('No faces detected')) {
+        errorMessage = 'No face detected in your photo. Please try:\n• A clearer, front-facing photo\n• Better lighting\n• A different angle';
+      } else if (error.message && error.message.includes('Invalid image format')) {
+        errorMessage = 'Invalid image format. Please upload a JPG or PNG file.';
+      } else if (error.message && error.message.includes('Backend service not available')) {
+        errorMessage = 'Face recognition service is not available. Please try again later.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      toast.error(errorMessage);
     } finally {
       setFaceMatching(false);
     }
@@ -421,13 +435,6 @@ const ViewPhotos = () => {
             </button>
           </div>
 
-          {/* Face Matching Status */}
-          {activeTab === 'yours' && faceMatching && (
-            <div className="flex items-center gap-2 text-sky-400">
-              <FaSpinner className="h-4 w-4 animate-spin" />
-              <span className="text-sm">Analyzing faces...</span>
-            </div>
-          )}
         </motion.div>
 
       </div>
@@ -601,9 +608,20 @@ const ViewPhotos = () => {
                 </button>
               </div>
               
-              <p className="text-slate-400 mb-6">
+              <p className="text-slate-400 mb-4">
                 Upload a clear photo of yourself to find all photos containing your face.
               </p>
+              
+              <div className="bg-slate-700 rounded-lg p-4 mb-6">
+                <h4 className="text-white font-medium mb-2">📸 Tips for better face detection:</h4>
+                <ul className="text-slate-300 text-sm space-y-1">
+                  <li>• Use good lighting (avoid shadows on your face)</li>
+                  <li>• Look directly at the camera</li>
+                  <li>• Make sure your face is clearly visible</li>
+                  <li>• Avoid sunglasses or face coverings</li>
+                  <li>• Use a high-quality photo</li>
+                </ul>
+              </div>
               
               <input
                 type="file"

@@ -18,21 +18,24 @@ class FlaskFaceAPI {
         body: formData,
       });
 
-      // Treat 200 with empty faces as success; only throw on 500-level
-      if (!response.ok && response.status >= 500) {
-        const error = await response.json();
-        throw new Error(error.message || error.error || 'Face analysis failed');
-      }
-
       const data = await response.json();
-      // Normalize success=false with no faces to an empty result
-      if (data && data.success === true && Array.isArray(data.face_encodings)) {
+      
+      // Handle different response scenarios
+      if (response.ok && data.success) {
         return data;
+      } else if (response.ok && !data.success) {
+        // Handle specific error cases with better user guidance
+        if (data.message && data.message.includes('No faces found')) {
+          throw new Error('No faces detected in the image. Please ensure:\n• The image contains a clear, front-facing face\n• Good lighting conditions\n• Face is not too small or too large\n• Try a different photo or angle');
+        } else if (data.message && data.message.includes('Could not load image')) {
+          throw new Error('Invalid image format. Please upload a valid image file (JPG, PNG, etc.)');
+        } else {
+          throw new Error(data.message || 'Face analysis failed');
+        }
+      } else {
+        // Handle HTTP errors
+        throw new Error(data.message || data.error || `Server error (${response.status})`);
       }
-      if (data && data.success === false && data.message && data.message.includes('No faces')) {
-        return { success: true, face_encodings: [] };
-      }
-      return data;
     } catch (error) {
       console.error('Error analyzing face:', error);
       throw error;

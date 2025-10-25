@@ -27,6 +27,18 @@ logger = logging.getLogger(__name__)
 # Initialize advanced face recognition service
 face_service = advanced_face_service
 
+# Initialize the face service
+if not face_service.initialized:
+    logger.info("Initializing face recognition service...")
+    face_service.initialize()
+    logger.info("Face recognition service initialized successfully!")
+
+# Initialize the InsightFace service
+if not insightface_faiss_service.initialized:
+    logger.info("Initializing InsightFace service...")
+    insightface_faiss_service.initialize()
+    logger.info("InsightFace service initialized successfully!")
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -61,7 +73,15 @@ def analyze_face():
         # Reset file pointer to beginning
         image_file.seek(0)
         
-        logger.info(f"🔍 Analyzing uploaded image: {image_file.filename}")
+        logger.info(f"Analyzing uploaded image: {image_file.filename}")
+        
+        # Check if face service is initialized
+        if not face_service.initialized:
+            logger.error("Face recognition service not initialized")
+            return jsonify({
+                'success': False,
+                'message': 'Face recognition service not available. Please ensure the service is properly initialized.'
+            }), 500
         
         # Get high-quality face descriptor using advanced AI
         descriptor = face_service.get_face_descriptor(image_file)
@@ -75,7 +95,7 @@ def analyze_face():
         })
             
     except Exception as e:
-        logger.error(f"❌ Error analyzing face: {str(e)}")
+        logger.error(f"Error analyzing face: {str(e)}")
         return jsonify({
             'success': False,
             'message': str(e)
@@ -250,10 +270,29 @@ def v2_ingest():
         photo_id = data.get('photo_id')
         image_url = data.get('image_url')
         embedding = data.get('embedding')
+        
+        logger.info(f"Ingesting photo {photo_id} for event {event_id}")
+        logger.info(f"Image URL: {image_url}")
+        
         if not event_id or not photo_id:
+            logger.error("Missing required parameters: event_id and photo_id")
             return jsonify({'success': False, 'message': 'event_id and photo_id are required'}), 400
+        
+        # Check if InsightFace service is initialized
+        if not insightface_faiss_service.initialized:
+            logger.error("InsightFace service not initialized")
+            return jsonify({'success': False, 'message': 'InsightFace service not available'}), 500
+        
+        # Attempt ingestion
         ok = insightface_faiss_service.ingest(event_id, photo_id, image_url=image_url, embedding=embedding)
-        return jsonify({'success': bool(ok)})
+        
+        if ok:
+            logger.info(f"✅ Successfully ingested photo {photo_id} for event {event_id}")
+            return jsonify({'success': True, 'message': f'Photo {photo_id} ingested successfully'})
+        else:
+            logger.warning(f"❌ Failed to ingest photo {photo_id} for event {event_id}")
+            return jsonify({'success': False, 'message': f'Failed to ingest photo {photo_id}'})
+            
     except Exception as e:
         logger.error(f"v2 ingest error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -275,6 +314,125 @@ def v2_match():
     except Exception as e:
         logger.error(f"v2 match error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/v2/clear-event', methods=['POST'])
+def v2_clear_event():
+    """Clear FAISS index and face recognition cache for a specific event."""
+    try:
+        data = request.get_json()
+        event_id = data.get('event_id')
+        
+        if not event_id:
+            return jsonify({'success': False, 'message': 'event_id is required'}), 400
+        
+        logger.info(f"Clearing FAISS index and cache for event: {event_id}")
+        
+        # Clear FAISS index for the event
+        cleared = insightface_faiss_service.clear_event(event_id)
+        
+        # Clear face recognition cache for the event
+        face_service.clear_event_cache(event_id)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Cleared FAISS index and cache for event {event_id}',
+            'faiss_cleared': cleared
+        })
+        
+    except Exception as e:
+        logger.error(f"v2 clear-event error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/v2/faiss-status', methods=['GET'])
+def v2_faiss_status():
+    """Check FAISS index status for an event."""
+    try:
+        event_id = request.args.get('event_id')
+        
+        if not event_id:
+            return jsonify({'success': False, 'message': 'event_id is required'}), 400
+        
+        logger.info(f"Checking FAISS status for event: {event_id}")
+        
+        # Check if event has FAISS index
+        has_index = event_id in insightface_faiss_service.event_indices
+        
+        if has_index:
+            index = insightface_faiss_service.event_indices[event_id]
+            photo_count = len(index.get('photo_ids', []))
+            index_size = index.get('index', {}).ntotal if hasattr(index.get('index', {}), 'ntotal') else 0
+        else:
+            photo_count = 0
+            index_size = 0
+        
+        return jsonify({
+            'success': True,
+            'event_id': event_id,
+            'has_index': has_index,
+            'photo_count': photo_count,
+            'index_size': index_size,
+            'message': f'FAISS index status for event {event_id}'
+        })
+        
+    except Exception as e:
+        logger.error(f"v2 faiss-status error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/v2/delete-cloudinary-batch', methods=['POST'])
+def v2_delete_cloudinary_batch():
+    """Delete multiple Cloudinary images in batch."""
+    try:
+        data = request.get_json()
+        public_ids = data.get('public_ids', [])
+        
+        if not public_ids:
+            return jsonify({'success': False, 'message': 'public_ids array is required'}), 400
+        
+        logger.info(f"Deleting {len(public_ids)} Cloudinary images")
+        
+        # Check if Cloudinary credentials are available
+        cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME')
+        api_key = os.getenv('CLOUDINARY_API_KEY')
+        api_secret = os.getenv('CLOUDINARY_API_SECRET')
+        
+        if not cloud_name or not api_key or not api_secret:
+            logger.error("Cloudinary credentials not configured")
+            return jsonify({
+                'success': False, 
+                'message': 'Cloudinary credentials not configured. Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET environment variables.',
+                'deleted_count': 0
+            }), 500
+        
+        # Use Cloudinary Admin API for batch deletion
+        import cloudinary
+        import cloudinary.api
+        
+        # Configure Cloudinary
+        cloudinary.config(
+            cloud_name=cloud_name,
+            api_key=api_key,
+            api_secret=api_secret
+        )
+        
+        # Delete resources in batch
+        result = cloudinary.api.delete_resources(public_ids)
+        
+        logger.info(f"Cloudinary deletion result: {result}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Deleted {len(public_ids)} Cloudinary images',
+            'deleted_count': len(public_ids),
+            'result': result
+        })
+        
+    except Exception as e:
+        logger.error(f"v2 delete-cloudinary-batch error: {e}")
+        return jsonify({
+            'success': False, 
+            'message': str(e),
+            'deleted_count': 0
+        }), 500
 
 @app.route('/api/face/compare', methods=['POST'])
 def compare_faces():

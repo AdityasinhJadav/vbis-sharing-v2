@@ -295,17 +295,22 @@ class AdvancedFaceRecognitionService:
             else:
                 image_rgb = self.load_image_from_file(image_input)
                 if image_rgb is None:
-                    raise Exception("Could not load image")
+                    raise Exception("Could not load image from file. Please ensure the image is a valid image format (JPG, PNG, etc.)")
             
-            self.logger.info(f"🔍 Analyzing image of shape: {image_rgb.shape}")
+            self.logger.info(f"Analyzing image of shape: {image_rgb.shape}")
             
             # Detect faces using multiple methods
             face_locations = self._detect_faces_multiple_methods(image_rgb)
             
             if len(face_locations) == 0:
+                # Provide more detailed debugging information
+                self.logger.warning("No faces detected. Image details:")
+                self.logger.warning(f"  - Image shape: {image_rgb.shape}")
+                self.logger.warning(f"  - Image dtype: {image_rgb.dtype}")
+                self.logger.warning(f"  - Image min/max values: {image_rgb.min()}/{image_rgb.max()}")
                 raise Exception("No faces found in the image. Please ensure the image contains a clear, front-facing face with good lighting.")
             
-            self.logger.info(f"✅ Found {len(face_locations)} face(s) in image")
+            self.logger.info(f"Found {len(face_locations)} face(s) in image")
             
             # Get face encodings for all detected faces
             face_encodings = face_recognition.face_encodings(
@@ -324,14 +329,14 @@ class AdvancedFaceRecognitionService:
                 face_sizes = [(bottom - top) * (right - left) for top, right, bottom, left in face_locations]
                 largest_face_idx = np.argmax(face_sizes)
                 selected_encoding = face_encodings[largest_face_idx]
-                self.logger.info(f"🎯 Selected largest face (index {largest_face_idx}) from {len(face_locations)} detected faces")
+                self.logger.info(f"Selected largest face (index {largest_face_idx}) from {len(face_locations)} detected faces")
             else:
                 selected_encoding = face_encodings[0]
             
             # Convert to list for JSON serialization
             encoding_list = selected_encoding.tolist()
             
-            self.logger.info(f"✅ Successfully extracted 128-dimensional face encoding")
+            self.logger.info(f"Successfully extracted 128-dimensional face encoding")
             return encoding_list
             
         except Exception as e:
@@ -544,6 +549,27 @@ class AdvancedFaceRecognitionService:
                     results['failed'] += 1
         
         return results
+
+    def clear_event_cache(self, event_id: str) -> bool:
+        """Clear face recognition cache for a specific event."""
+        try:
+            # Clear cache entries that contain the event ID in the URL
+            # This is a simple approach - in a production system, you might want
+            # to store event_id metadata with cache entries
+            keys_to_remove = []
+            for key in self.descriptor_cache.store:
+                if event_id in key:  # Simple string matching for event ID
+                    keys_to_remove.append(key)
+            
+            for key in keys_to_remove:
+                self.descriptor_cache.delete(key)
+            
+            self.logger.info(f"Cleared {len(keys_to_remove)} cache entries for event {event_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error clearing cache for event {event_id}: {e}")
+            return False
 
 
 # Global service instance

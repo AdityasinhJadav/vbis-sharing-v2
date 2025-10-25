@@ -1,9 +1,23 @@
 // Browser-compatible Cloudinary upload function
 export const uploadToCloudinary = async (file, options = {}) => {
   try {
+    // Check if environment variables are set
+    const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+    const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
+    
+    if (!cloudName) {
+      throw new Error('Cloudinary cloud name not configured. Please set VITE_CLOUDINARY_CLOUD_NAME in your .env file.');
+    }
+    
+    if (!uploadPreset) {
+      throw new Error('Cloudinary upload preset not configured. Please set VITE_CLOUDINARY_UPLOAD_PRESET in your .env file.');
+    }
+    
+    console.log('Cloudinary config:', { cloudName, uploadPreset });
+    
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('upload_preset', import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET);
+    formData.append('upload_preset', uploadPreset);
     
     // Add folder if specified
     if (options.folder) {
@@ -20,20 +34,27 @@ export const uploadToCloudinary = async (file, options = {}) => {
       formData.append('tags', options.tags.join(','));
     }
 
-    const response = await fetch(
-      `https://api.cloudinary.com/v1_1/${import.meta.env.VITE_CLOUDINARY_CLOUD_NAME}/image/upload`,
-      {
-        method: 'POST',
-        body: formData,
-      }
-    );
+    const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
+    console.log('Uploading to:', uploadUrl);
+    
+    const response = await fetch(uploadUrl, {
+      method: 'POST',
+      body: formData,
+    });
 
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Cloudinary API error:', errorData);
+      
+      if (errorData.error?.message?.includes('Upload preset not found')) {
+        throw new Error(`Upload preset '${uploadPreset}' not found. Please check your Cloudinary dashboard and create an unsigned upload preset.`);
+      }
+      
       throw new Error(`Upload failed: ${errorData.error?.message || response.statusText}`);
     }
 
     const data = await response.json();
+    console.log('Upload successful:', data.public_id);
     return data;
   } catch (error) {
     console.error('Cloudinary upload error:', error);

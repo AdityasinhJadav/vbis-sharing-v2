@@ -10,6 +10,7 @@ import { useTheme } from '../theme/ThemeContext';
 import { generateUniquePasscode, validatePasscode, checkPasscodeAvailability } from '../utils/eventUtils';
 import { flaskFaceService } from '../utils/flaskFaceApi';
 import { quickBulkIngest } from '../utils/quickBulkIngest';
+import { createEventDeletionService } from '../utils/eventDeletionService';
 
 const Dashboard = () => {
   const { isLight } = useTheme();
@@ -732,68 +733,33 @@ const RecentEvents = ({ mode = 'organizer' }) => {
                       whileTap={{ scale: 0.95 }}
                       disabled={busyId === ev.id}
                       onClick={async () => {
-                        if (!window.confirm('Delete this event and all related data (photos and joins)?')) return;
+                        if (!window.confirm('Delete this event and all related data (photos, joins, Cloudinary images, and face recognition data)? This cannot be undone.')) return;
+                        
                         try {
                           setBusyId(ev.id);
-                          console.log('Starting deletion for event:', ev.id);
+                          console.log('🗑️ Starting comprehensive event deletion for:', ev.id);
                           
-                          // Helper function to delete in very small chunks
-                          const deleteInChunks = async (docs, collectionName) => {
-                            const BATCH_SIZE = 50; // Much smaller batches
-                            let totalDeleted = 0;
+                          // Use the comprehensive deletion service
+                          const eventDeletionService = createEventDeletionService(db);
+                          const results = await eventDeletionService.deleteEvent(ev.id, ev.passcode);
+                          
+                          if (results.success) {
+                            const summary = [
+                              `✅ Events: ${results.deleted.events}`,
+                              `✅ Photos: ${results.deleted.photos}`,
+                              `✅ User joins: ${results.deleted.joins}`,
+                              `✅ Cloudinary images: ${results.deleted.cloudinaryImages}`,
+                              `✅ FAISS index: ${results.deleted.faissIndex ? 'Cleared' : 'N/A'}`,
+                              `✅ Face cache: ${results.deleted.faceCache ? 'Cleared' : 'N/A'}`
+                            ].join('\n');
                             
-                            for (let i = 0; i < docs.length; i += BATCH_SIZE) {
-                              const chunk = docs.slice(i, i + BATCH_SIZE);
-                              const batch = writeBatch(db);
-                              
-                              chunk.forEach(doc => {
-                                batch.delete(doc.ref);
-                              });
-                              
-                              await batch.commit();
-                              totalDeleted += chunk.length;
-                              console.log(`Deleted ${chunk.length} ${collectionName} (${totalDeleted}/${docs.length} total)`);
-                              
-                              // Add small delay between batches
-                              if (i + BATCH_SIZE < docs.length) {
-                                await new Promise(resolve => setTimeout(resolve, 100));
-                              }
-                            }
-                            
-                            return totalDeleted;
-                          };
-                          
-                          // Step 1: Delete joined mappings
-                          console.log('Deleting joined mappings...');
-                          const joinsQ = query(collection(db, 'userJoinedEvents'), where('eventId', '==', ev.id));
-                          const snapJoins = await getDocs(joinsQ);
-                          
-                          if (!snapJoins.empty) {
-                            await deleteInChunks(snapJoins.docs, 'join records');
+                            alert(`Event deleted successfully!\n\n${summary}`);
+                          } else {
+                            const errorSummary = results.errors.length > 0 
+                              ? `\n\nErrors encountered:\n${results.errors.join('\n')}`
+                              : '';
+                            alert(`Event deletion completed with some issues.${errorSummary}`);
                           }
-                          
-                          // Step 2: Delete photos by event_id first
-                          console.log('Deleting photos by event_id...');
-                          let photosQ = query(collection(db, 'photos'), where('event_id', '==', ev.id));
-                          let photosSnap = await getDocs(photosQ);
-                          
-                          // If no photos by event_id, try by passcode
-                          if (photosSnap.empty) {
-                            console.log('No photos found by event_id, trying passcode...');
-                            photosQ = query(collection(db, 'photos'), where('project_passcode', '==', ev.passcode));
-                            photosSnap = await getDocs(photosQ);
-                          }
-                          
-                          if (!photosSnap.empty) {
-                            await deleteInChunks(photosSnap.docs, 'photos');
-                          }
-                          
-                          // Step 3: Delete the event document
-                          console.log('Deleting event document...');
-                          await deleteDoc(doc(db, 'events', ev.id));
-                          console.log('Event deleted successfully');
-                          
-                          alert('Event and all related data deleted successfully!');
                         } catch (e) {
                           console.error('Delete event error:', e);
                           alert(`Failed to delete event: ${e.message || 'Unknown error'}`);

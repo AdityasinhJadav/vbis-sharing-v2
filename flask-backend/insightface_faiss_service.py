@@ -236,6 +236,21 @@ class InsightFaceFaissService:
         deduped.sort(key=lambda x: x["score"], reverse=True)
         return deduped
 
+    def clear_event(self, event_id: str) -> bool:
+        """Clear FAISS index and all data for a specific event."""
+        try:
+            if event_id in self.event_indices:
+                # Remove the event from the indices
+                del self.event_indices[event_id]
+                logger.info(f"Cleared FAISS index for event {event_id}")
+                return True
+            else:
+                logger.info(f"No FAISS index found for event {event_id}")
+                return True  # Consider it successful if no index exists
+        except Exception as e:
+            logger.error(f"Error clearing FAISS index for event {event_id}: {e}")
+            return False
+
 
 # Singleton service
 insightface_faiss_service = InsightFaceFaissService()

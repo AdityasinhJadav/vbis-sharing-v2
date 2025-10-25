@@ -1,4 +1,4 @@
-import React, { useState, useContext, useMemo } from "react";
+import React, { useState, useContext, useMemo, useEffect } from "react";
 import { db } from "../firebase";
 import { AuthContext } from "../auth/AuthContext";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -9,6 +9,7 @@ import { FaUpload, FaImage, FaArrowLeft, FaCheckCircle, FaExclamationTriangle } 
 import { flaskFaceService } from '../utils/flaskFaceApi';
 import { uploadToCloudinary } from "../utils/cloudinary";
 import { collection, addDoc, serverTimestamp, query, where, getDocs } from "firebase/firestore";
+import { enhancedUploadService } from '../utils/enhancedUploadService';
 
 export default function UploadPhotos() {
   const { currentUser } = useContext(AuthContext);
@@ -25,6 +26,102 @@ export default function UploadPhotos() {
   const [uploadComplete, setUploadComplete] = useState(false);
   const [compressing, setCompressing] = useState(false);
   const [compressionProgress, setCompressionProgress] = useState(0);
+  
+  // Enhanced upload states
+  const [isPaused, setIsPaused] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState('idle'); // 'idle', 'uploading', 'paused', 'completed'
+  const [fileProgress, setFileProgress] = useState({});
+  const [uploadResults, setUploadResults] = useState([]);
+  const [faceProcessingStatus, setFaceProcessingStatus] = useState({ active: false, progress: 0 });
+
+  // Enhanced upload event handlers
+  useEffect(() => {
+    const handleUploadStarted = (data) => {
+      setUploadStatus('uploading');
+      setUploading(true);
+      setUploadComplete(false);
+      setFileProgress({});
+      setUploadResults([]);
+      toast.info(`Starting upload of ${data.totalFiles} files...`);
+    };
+
+    const handleFileProgress = (data) => {
+      setFileProgress(prev => ({
+        ...prev,
+        [data.index]: {
+          fileName: data.fileName,
+          progress: data.progress,
+          stage: data.stage
+        }
+      }));
+    };
+
+    const handleBatchComplete = (data) => {
+      const completed = Object.values(fileProgress).filter(p => p.stage === 'complete').length;
+      const total = files.length;
+      setUploadProgress(Math.round((completed / total) * 100));
+    };
+
+    const handleUploadComplete = (data) => {
+      setUploadStatus('completed');
+      setUploading(false);
+      setUploadComplete(true);
+      setUploadResults(data.results);
+      
+      if (data.successful > 0) {
+        toast.success(`Successfully uploaded ${data.successful} photos!`);
+      }
+      if (data.failed > 0) {
+        toast.error(`${data.failed} photos failed to upload`);
+      }
+    };
+
+    const handleUploadPaused = () => {
+      setIsPaused(true);
+      setUploadStatus('paused');
+      toast.info('Upload paused');
+    };
+
+    const handleUploadResumed = () => {
+      setIsPaused(false);
+      setUploadStatus('uploading');
+      toast.info('Upload resumed');
+    };
+
+    const handleFaceProcessingStarted = (data) => {
+      setFaceProcessingStatus({ active: true, progress: 0, total: data.count });
+      toast.info(`Processing faces for ${data.count} photos in background...`);
+    };
+
+    const handleFaceProcessingProgress = (data) => {
+      setFaceProcessingStatus(prev => ({
+        ...prev,
+        progress: Math.round((data.index / data.total) * 100),
+        current: data.fileName
+      }));
+    };
+
+    const handleFaceProcessingFinished = (data) => {
+      setFaceProcessingStatus({ active: false, progress: 100 });
+      toast.success(`Face processing completed: ${data.successful}/${data.total} photos processed`);
+    };
+
+    // Register event listeners
+    enhancedUploadService.on('uploadStarted', handleUploadStarted);
+    enhancedUploadService.on('fileProgress', handleFileProgress);
+    enhancedUploadService.on('batchComplete', handleBatchComplete);
+    enhancedUploadService.on('uploadComplete', handleUploadComplete);
+    enhancedUploadService.on('uploadPaused', handleUploadPaused);
+    enhancedUploadService.on('uploadResumed', handleUploadResumed);
+    enhancedUploadService.on('faceProcessingStarted', handleFaceProcessingStarted);
+    enhancedUploadService.on('faceProcessingProgress', handleFaceProcessingProgress);
+    enhancedUploadService.on('faceProcessingFinished', handleFaceProcessingFinished);
+
+    // Cleanup
+    return () => {
+      enhancedUploadService.eventListeners = {};
+    };
+  }, [files.length, fileProgress]);
 
   // Image compression utility
   const compressImage = (file, maxSizeMB = 8, quality = 0.8) => {
@@ -123,10 +220,6 @@ export default function UploadPhotos() {
       return;
     }
 
-    setUploading(true);
-    setUploadProgress(0);
-    setUploadComplete(false);
-
     try {
       // First verify the event exists
       const eventQuery = query(collection(db, 'events'), where('passcode', '==', passcode));
@@ -134,7 +227,6 @@ export default function UploadPhotos() {
       
       if (eventSnapshot.empty) {
         toast.error("Invalid event passcode. Please check and try again.");
-        setUploading(false);
         return;
       }
 
@@ -142,89 +234,40 @@ export default function UploadPhotos() {
       const eventId = eventDoc.id;
       const eventData = eventDoc.data();
 
-      let uploadedCount = 0;
-      const totalFiles = files.length;
+      // Use enhanced upload service
+      const results = await enhancedUploadService.uploadFiles(files, {
+        passcode,
+        eventId,
+        eventName: eventData.eventName || 'Unknown Event',
+        uploadedBy: currentUser.email,
+        uploadedByUid: currentUser.uid,
+        folder: `facematch/${passcode}`,
+        tags: [passcode, 'facematch', eventId]
+      });
 
-      // Upload each file to Cloudinary and save metadata to Firestore
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        
-        try {
-          // Upload to Cloudinary
-          const cloudinaryResponse = await uploadToCloudinary(file, {
-            folder: `facematch/${passcode}`,
-            tags: [passcode, 'facematch', eventId],
-            public_id: `${eventId}_${Date.now()}_${i}`
-          });
+      console.log('Upload results:', results);
 
-          // Save metadata to Firestore
-          const photoDoc = await addDoc(collection(db, 'photos'), {
-            cloudinaryPublicId: cloudinaryResponse.public_id,
-            cloudinaryUrl: cloudinaryResponse.secure_url,
-            originalName: file.name,
-            project_passcode: passcode,
-            event_id: eventId,
-            eventName: eventData.eventName || 'Unknown Event',
-            uploadedBy: currentUser.email,
-            uploadedByUid: currentUser.uid,
-            uploadedAt: serverTimestamp(),
-            fileSize: file.size,
-            fileType: file.type,
-            width: cloudinaryResponse.width,
-            height: cloudinaryResponse.height,
-          });
-
-          // Ingest photo into FAISS index for V2 face matching
-          try {
-            console.log(`🔄 Ingesting photo ${i + 1}/${totalFiles} into FAISS index...`);
-            const ingestResult = await flaskFaceService.api.ingestPhoto(
-              eventId,
-              photoDoc.id,
-              cloudinaryResponse.secure_url
-            );
-            if (ingestResult.success) {
-              console.log(`✅ Photo ${i + 1} ingested successfully`);
-            } else {
-              console.warn(`⚠️ Photo ${i + 1} ingestion failed:`, ingestResult);
-            }
-          } catch (ingestError) {
-            console.warn(`⚠️ Failed to ingest photo ${i + 1} into FAISS:`, ingestError);
-            // Don't fail the upload if ingestion fails
-          }
-
-          uploadedCount++;
-          setUploadProgress(Math.round(((i + 1) / totalFiles) * 100));
-        } catch (fileError) {
-          console.error(`Failed to upload ${file.name}:`, fileError);
-          toast.error(`Failed to upload ${file.name}`);
-        }
-      }
-
-      if (uploadedCount > 0) {
-        setUploadComplete(true);
-        toast.success(`Successfully uploaded ${uploadedCount} out of ${totalFiles} photos!`);
-        
-        // Clear files after successful upload
-        setFiles([]);
-        // Reset file input
-        const fileInput = document.getElementById('photo-input');
-        if (fileInput) fileInput.value = '';
-        
-        // Redirect to view photos page after 2 seconds
-        setTimeout(() => {
-          navigate(`/photos/${passcode}`);
-        }, 2000);
-      } else {
-        toast.error("No photos were uploaded successfully.");
-      }
     } catch (error) {
-      console.error('Upload error:', error);
-      toast.error(`Upload failed: ${error.message || 'Unknown error'}`);
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
+      console.error("Upload error:", error);
+      toast.error("Upload failed. Please try again.");
     }
   }
+
+  // Pause/Resume handlers
+  const handlePause = () => {
+    enhancedUploadService.pause();
+  };
+
+  const handleResume = () => {
+    enhancedUploadService.resume();
+  };
+
+  const handleCancel = () => {
+    enhancedUploadService.cancel();
+    setUploading(false);
+    setUploadStatus('idle');
+    toast.info('Upload cancelled');
+  };
 
   return (
     <div className="min-h-screen bg-slate-900 relative overflow-x-hidden pt-24 pb-10 px-4">
@@ -381,35 +424,136 @@ export default function UploadPhotos() {
             </motion.div>
           )}
 
-          {/* Upload Button */}
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={handleUpload}
-            disabled={uploading || compressing || !passcode || files.length === 0}
-            className={`w-full py-4 rounded-xl font-bold text-lg transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed ${
-              isLight
-                ? 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white shadow-lg hover:shadow-xl'
-                : 'bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 text-white shadow-lg hover:shadow-xl'
-            }`}
-          >
-            {compressing ? (
-              <>
-                <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" />
-                Processing Images...
-              </>
-            ) : uploading ? (
-              <>
-                <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" />
-                Uploading...
-              </>
-            ) : (
-              <>
-                <FaUpload className="h-5 w-5" />
-                Upload {files.length > 0 ? `${files.length} Photo${files.length > 1 ? 's' : ''}` : 'Photos'}
-              </>
+          {/* Enhanced Upload Controls */}
+          <div className="space-y-4">
+            {/* Upload Button */}
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={handleUpload}
+              disabled={uploading || compressing || !passcode || files.length === 0}
+              className={`w-full py-4 rounded-xl font-bold text-lg transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed ${
+                isLight
+                  ? 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white shadow-lg hover:shadow-xl'
+                  : 'bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 text-white shadow-lg hover:shadow-xl'
+              }`}
+            >
+              {compressing ? (
+                <>
+                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" />
+                  <span>Compressing... {compressionProgress}%</span>
+                </>
+              ) : uploading ? (
+                <>
+                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" />
+                  <span>Uploading... {uploadProgress}%</span>
+                </>
+              ) : (
+                <>
+                  <FaUpload className="h-5 w-5" />
+                  <span>Upload {files.length > 0 ? `${files.length} Photo${files.length > 1 ? 's' : ''}` : 'Photos'}</span>
+                </>
+              )}
+            </motion.button>
+
+            {/* Pause/Resume/Cancel Controls */}
+            {uploading && (
+              <div className="flex gap-3">
+                {!isPaused ? (
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={handlePause}
+                    className="flex-1 py-3 px-4 rounded-lg bg-yellow-600 hover:bg-yellow-700 text-white font-medium transition-colors"
+                  >
+                    ⏸️ Pause Upload
+                  </motion.button>
+                ) : (
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={handleResume}
+                    className="flex-1 py-3 px-4 rounded-lg bg-green-600 hover:bg-green-700 text-white font-medium transition-colors"
+                  >
+                    ▶️ Resume Upload
+                  </motion.button>
+                )}
+                
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleCancel}
+                  className="flex-1 py-3 px-4 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium transition-colors"
+                >
+                  ❌ Cancel
+                </motion.button>
+              </div>
             )}
-          </motion.button>
+
+            {/* Enhanced Progress Display */}
+            {uploading && (
+              <div className="space-y-3">
+                {/* Overall Progress */}
+                <div className="bg-slate-700 rounded-lg p-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-sm font-medium text-slate-300">Overall Progress</span>
+                    <span className="text-sm text-slate-400">{uploadProgress}%</span>
+                  </div>
+                  <div className="w-full bg-slate-600 rounded-full h-2">
+                    <div 
+                      className="bg-gradient-to-r from-purple-500 to-blue-500 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Individual File Progress */}
+                {Object.keys(fileProgress).length > 0 && (
+                  <div className="bg-slate-700 rounded-lg p-4">
+                    <div className="text-sm font-medium text-slate-300 mb-3">File Progress</div>
+                    <div className="space-y-2 max-h-32 overflow-y-auto">
+                      {Object.entries(fileProgress).map(([index, progress]) => (
+                        <div key={index} className="flex items-center gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs text-slate-400 truncate">{progress.fileName}</div>
+                            <div className="text-xs text-slate-500 capitalize">{progress.stage}</div>
+                          </div>
+                          <div className="w-16 bg-slate-600 rounded-full h-1.5">
+                            <div 
+                              className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
+                              style={{ width: `${progress.progress}%` }}
+                            />
+                          </div>
+                          <span className="text-xs text-slate-400 w-8">{Math.round(progress.progress)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Face Processing Status */}
+                {faceProcessingStatus.active && (
+                  <div className="bg-slate-700 rounded-lg p-4">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-sm font-medium text-slate-300">Face Processing</span>
+                      <span className="text-sm text-slate-400">{faceProcessingStatus.progress}%</span>
+                    </div>
+                    <div className="w-full bg-slate-600 rounded-full h-2">
+                      <div 
+                        className="bg-gradient-to-r from-green-500 to-emerald-500 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${faceProcessingStatus.progress}%` }}
+                      />
+                    </div>
+                    {faceProcessingStatus.current && (
+                      <div className="text-xs text-slate-400 mt-1 truncate">
+                        Processing: {faceProcessingStatus.current}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </motion.div>
       </div>
     </div>

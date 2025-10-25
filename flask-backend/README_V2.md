@@ -38,6 +38,34 @@ InsightFace will automatically download the `buffalo_l` model on first use (~100
 
 ### V2 Endpoints (New)
 
+#### Analyze (ArcFace embedding)
+```http
+POST /api/v2/analyze
+Content-Type: multipart/form-data
+
+image=<file>
+```
+
+Response (success with face):
+```json
+{
+  "success": true,
+  "embedding": [ ...512 floats... ],
+  "dimension": 512,
+  "message": "ArcFace embedding extracted successfully"
+}
+```
+
+Response (no face detected):
+```json
+{
+  "success": true,
+  "embedding": null,
+  "dimension": 0,
+  "message": "No faces found in the image. Please ensure a clear, front-facing face with good lighting."
+}
+```
+
 #### Ingest Photo
 ```http
 POST /api/v2/ingest
@@ -50,6 +78,10 @@ Content-Type: application/json
   "embedding": [0.1, 0.2, ...] // Optional: pre-computed embedding
 }
 ```
+
+Notes:
+- If `image_url` is provided (recommended), the backend will detect and index **all faces** in the image. Each face is stored in FAISS; matches are later deduplicated to the photo level and scored by max-similarity.
+- If `embedding` is provided, it should be a 512-d ArcFace vector (already normalized). Only one vector is added in that case.
 
 #### Fast Match
 ```http
@@ -114,11 +146,13 @@ python photo_worker.py --once --firebase-config firebase_config.json
 ```python
 import requests
 
-# Get user embedding (use existing V1 analyze endpoint)
-user_response = requests.post('http://localhost:5000/api/face/analyze', files={
+# Get user embedding (V2 - ArcFace)
+user_response = requests.post('http://localhost:5000/api/v2/analyze', files={
     'image': open('user_photo.jpg', 'rb')
 })
-user_embedding = user_response.json()['descriptor']
+user_embedding = user_response.json().get('embedding')
+if user_embedding is None:
+    raise RuntimeError('No face found in user image')
 
 # Fast match using FAISS
 match_response = requests.post('http://localhost:5000/api/v2/match', json={
@@ -147,6 +181,8 @@ matches = match_response.json()['matches']
 2. **Batch processing**: Use the bulk ingest script for initial setup
 3. **Background workers**: Run photo workers to process uploads asynchronously
 4. **Cloudinary optimization**: Use downscaled images (640px) for faster processing
+5. **Index all faces per photo**: The backend now ingests all detected faces and deduplicates at match-time; this improves recall on group photos and difficult angles
+6. **Threshold tuning**: Typical ArcFace cosine thresholds are 0.30–0.45; lower to increase recall, higher to increase precision
 
 ## Configuration
 
