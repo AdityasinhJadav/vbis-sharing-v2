@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useContext, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FaArrowLeft, FaDownload, FaTimes, FaEye, FaSpinner, FaCamera, FaUpload, FaUser, FaImages } from 'react-icons/fa';
+import { FaArrowLeft, FaDownload, FaTimes, FaEye, FaSpinner, FaCamera, FaUpload, FaUser, FaImages, FaCheck, FaCheckSquare, FaSquare } from 'react-icons/fa';
 import { AuthContext } from '../auth/AuthContext';
 import { useToast } from '../components/ToastProvider';
 import { useTheme } from '../theme/ThemeContext';
@@ -10,10 +10,14 @@ import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestor
 import { getThumbnailUrl, getFullSizeUrl } from '../utils/cloudinary';
 import { flaskFaceService } from '../utils/flaskFaceApi';
 import CameraCapture from '../components/CameraCapture';
+import LoadingSpinner from '../components/LoadingSpinner';
+import { SkeletonPhotoGrid } from '../components/SkeletonLoader';
+import { cacheUtils, generateCacheKey } from '../utils/cache';
+import { perfMonitor } from '../utils/performance';
 
 // Justified gallery that preserves image aspect ratios.
 // Wider images occupy more horizontal space within a row.
-const JustifiedGallery = ({ photos, onSelect, targetRowHeight = 260, rowGap = 16, itemGap = 16 }) => {
+const JustifiedGallery = ({ photos, onSelect, onToggleSelect, selectedPhotos, isSelectionMode, targetRowHeight = 260, rowGap = 16, itemGap = 16 }) => {
   const containerRef = useRef(null);
   const [containerWidth, setContainerWidth] = useState(0);
 
@@ -83,7 +87,7 @@ const JustifiedGallery = ({ photos, onSelect, targetRowHeight = 260, rowGap = 16
               key={item.photo.id}
               className="group relative overflow-hidden bg-slate-800 border border-slate-700 hover:border-slate-600 transition-all cursor-pointer"
               style={{ width: item.width, height: item.height }}
-              onClick={() => onSelect(item.photo)}
+              onClick={() => isSelectionMode ? onToggleSelect(item.photo) : onSelect(item.photo)}
             >
               <img
                 src={getThumbnailUrl(item.photo.cloudinaryPublicId, Math.min(1600, item.width * 2))}
@@ -97,16 +101,18 @@ const JustifiedGallery = ({ photos, onSelect, targetRowHeight = 260, rowGap = 16
                   <FaEye className="h-6 w-6 text-white" />
                 </div>
               </div>
-              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                <p className="text-white text-sm font-medium truncate">
-                  {item.photo.originalName || 'Untitled'}
-                </p>
-                {item.photo.uploadedAt && (
-                  <p className="text-slate-300 text-xs">
-                    {new Date(item.photo.uploadedAt.seconds * 1000).toLocaleDateString()}
-                  </p>
-                )}
-              </div>
+              {/* Selection checkbox */}
+              {isSelectionMode && (
+                <div className="absolute top-2 left-2">
+                  <div className="w-6 h-6 bg-black/50 rounded flex items-center justify-center">
+                    {selectedPhotos.includes(item.photo.id) ? (
+                      <FaCheckSquare className="h-4 w-4 text-sky-400" />
+                    ) : (
+                      <FaSquare className="h-4 w-4 text-white/70" />
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -135,6 +141,8 @@ const ViewPhotos = () => {
   const [faceMatching, setFaceMatching] = useState(false);
   const [userFaceDescriptor, setUserFaceDescriptor] = useState(null);
   const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [selectedPhotos, setSelectedPhotos] = useState([]);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
 
   // Get passcode from session storage
   useEffect(() => {
@@ -327,26 +335,161 @@ const ViewPhotos = () => {
   const downloadPhoto = async (photo) => {
     try {
       const imageUrl = getFullSizeUrl(photo.cloudinaryPublicId);
-      const link = document.createElement('a');
-      link.href = imageUrl;
-      link.download = photo.originalName || `photo-${photo.id}.jpg`;
-      link.target = '_blank';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      toast.success('Download started!');
+      const fileName = photo.originalName || `photo-${photo.id}.jpg`;
+      
+      console.log('Downloading photo:', {
+        photoId: photo.id,
+        fileName,
+        imageUrl,
+        cloudinaryPublicId: photo.cloudinaryPublicId
+      });
+      
+      try {
+        // Method 1: Fetch as blob (handles CORS properly)
+        console.log('Attempting blob download...');
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch image: ${response.statusText}`);
+        }
+        
+        const blob = await response.blob();
+        console.log('Blob created, size:', blob.size);
+        
+        const url = window.URL.createObjectURL(blob);
+        
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        // Clean up the object URL
+        window.URL.revokeObjectURL(url);
+        
+        console.log('Blob download successful');
+        toast.success('Download started!');
+      } catch (blobError) {
+        console.warn('Blob download failed, trying direct download:', blobError);
+        
+        // Method 2: Direct download (fallback)
+        console.log('Attempting direct download...');
+        const link = document.createElement('a');
+        link.href = imageUrl;
+        link.download = fileName;
+        link.target = '_blank';
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        console.log('Direct download attempted');
+        toast.success('Download started!');
+      }
     } catch (error) {
       console.error('Download error:', error);
-      toast.error('Failed to download photo');
+      toast.error('Failed to download photo. Please try again.');
+    }
+  };
+
+  const togglePhotoSelection = (photo) => {
+    setSelectedPhotos(prev => {
+      if (prev.includes(photo.id)) {
+        return prev.filter(id => id !== photo.id);
+      } else {
+        return [...prev, photo.id];
+      }
+    });
+  };
+
+  const selectAllPhotos = () => {
+    setSelectedPhotos(filteredPhotos.map(photo => photo.id));
+  };
+
+  const clearSelection = () => {
+    setSelectedPhotos([]);
+  };
+
+  const downloadSelectedPhotos = async () => {
+    if (selectedPhotos.length === 0) {
+      toast.warning('No photos selected');
+      return;
+    }
+
+    try {
+      const selectedPhotoObjects = filteredPhotos.filter(photo => selectedPhotos.includes(photo.id));
+      let successCount = 0;
+      let errorCount = 0;
+      
+      for (let i = 0; i < selectedPhotoObjects.length; i++) {
+        const photo = selectedPhotoObjects[i];
+        
+        try {
+          const imageUrl = getFullSizeUrl(photo.cloudinaryPublicId);
+          const fileName = photo.originalName || `photo-${photo.id}.jpg`;
+          
+          // Fetch the image as a blob to handle CORS properly
+          const response = await fetch(imageUrl);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch image: ${response.statusText}`);
+          }
+          
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = fileName;
+          link.style.display = 'none';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          
+          // Clean up the object URL
+          window.URL.revokeObjectURL(url);
+          
+          successCount++;
+        } catch (error) {
+          console.error(`Failed to download photo ${photo.id}:`, error);
+          errorCount++;
+        }
+        
+        // Add delay between downloads to prevent browser blocking
+        if (i < selectedPhotoObjects.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+      
+      if (successCount > 0) {
+        toast.success(`Downloaded ${successCount} photo${successCount !== 1 ? 's' : ''}!`);
+      }
+      if (errorCount > 0) {
+        toast.warning(`Failed to download ${errorCount} photo${errorCount !== 1 ? 's' : ''}`);
+      }
+      
+      clearSelection();
+      setIsSelectionMode(false);
+    } catch (error) {
+      console.error('Bulk download error:', error);
+      toast.error('Failed to download photos');
     }
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center pt-24">
-        <div className="text-center">
-          <FaSpinner className="h-8 w-8 text-sky-400 animate-spin mx-auto mb-4" />
-          <p className="text-slate-300">Loading photos...</p>
+      <div className="min-h-screen bg-slate-900 pt-24 pb-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-4 mb-8">
+            <div className="p-3 rounded-xl bg-slate-800 border border-slate-700">
+              <FaArrowLeft className="h-5 w-5 text-slate-400" />
+            </div>
+            <div>
+              <div className="h-8 w-48 bg-slate-800 rounded animate-pulse mb-2"></div>
+              <div className="h-4 w-32 bg-slate-800 rounded animate-pulse"></div>
+            </div>
+          </div>
+          <SkeletonPhotoGrid count={12} />
         </div>
       </div>
     );
@@ -398,8 +541,67 @@ const ViewPhotos = () => {
             </div>
           </div>
           
-          <div className="text-slate-400">
-            {filteredPhotos.length} photo{filteredPhotos.length !== 1 ? 's' : ''}
+          <div className="flex items-center gap-4">
+            <div className="text-slate-400">
+              {filteredPhotos.length} photo{filteredPhotos.length !== 1 ? 's' : ''}
+            </div>
+            
+            {filteredPhotos.length > 0 && (
+              <div className="flex items-center gap-2">
+                {!isSelectionMode ? (
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => setIsSelectionMode(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-slate-800 border border-slate-700 text-slate-400 hover:text-white rounded-lg transition-colors"
+                  >
+                    <FaCheck className="h-4 w-4" />
+                    Select Photos
+                  </motion.button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={selectAllPhotos}
+                      className="px-3 py-2 bg-slate-800 border border-slate-700 text-slate-400 hover:text-white rounded-lg transition-colors text-sm"
+                    >
+                      Select All
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={clearSelection}
+                      className="px-3 py-2 bg-slate-800 border border-slate-700 text-slate-400 hover:text-white rounded-lg transition-colors text-sm"
+                    >
+                      Clear
+                    </motion.button>
+                    {selectedPhotos.length > 0 && (
+                      <motion.button
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={downloadSelectedPhotos}
+                        className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+                      >
+                        <FaDownload className="h-4 w-4" />
+                        Download ({selectedPhotos.length})
+                      </motion.button>
+                    )}
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => {
+                        setIsSelectionMode(false);
+                        clearSelection();
+                      }}
+                      className="px-3 py-2 bg-slate-800 border border-slate-700 text-slate-400 hover:text-white rounded-lg transition-colors text-sm"
+                    >
+                      Cancel
+                    </motion.button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </motion.div>
 
@@ -447,15 +649,11 @@ const ViewPhotos = () => {
             animate={{ opacity: 1 }}
             className="text-center py-16"
           >
-            <div className="flex flex-col items-center gap-4">
-              <div className="flex items-center gap-3 text-sky-400">
-                <FaSpinner className="h-8 w-8 animate-spin" />
-                <span className="text-xl font-medium">Analyzing your face and finding matches...</span>
-              </div>
-              <div className="text-slate-400">
-                This may take a few moments. Please wait.
-              </div>
-            </div>
+            <LoadingSpinner 
+              type="search"
+              message="Analyzing your face and finding matches..."
+              size="large"
+            />
           </motion.div>
         ) : filteredPhotos.length === 0 ? (
           <motion.div
@@ -510,6 +708,9 @@ const ViewPhotos = () => {
             <JustifiedGallery
               photos={filteredPhotos}
               onSelect={(p) => setSelectedPhoto(p)}
+              onToggleSelect={togglePhotoSelection}
+              selectedPhotos={selectedPhotos}
+              isSelectionMode={isSelectionMode}
             />
           </motion.div>
         )}
@@ -555,20 +756,6 @@ const ViewPhotos = () => {
                 className="max-w-full max-h-full object-contain rounded-lg"
               />
 
-              {/* Photo details */}
-              <div className="absolute bottom-4 left-4 right-4 bg-black/50 rounded-lg p-4">
-                <h3 className="text-white font-semibold mb-1">
-                  {selectedPhoto.originalName || 'Untitled'}
-                </h3>
-                <div className="text-slate-300 text-sm space-y-1">
-                  {selectedPhoto.uploadedAt && (
-                    <p>Uploaded: {new Date(selectedPhoto.uploadedAt.seconds * 1000).toLocaleString()}</p>
-                  )}
-                  {selectedPhoto.uploadedBy && (
-                    <p>By: {selectedPhoto.uploadedBy}</p>
-                  )}
-                </div>
-              </div>
             </motion.div>
           </motion.div>
         )}

@@ -10,6 +10,10 @@ from dotenv import load_dotenv
 import logging
 from face_recognition_advanced import advanced_face_service
 from insightface_faiss_service import insightface_faiss_service
+from security_middleware import (
+    rate_limit, validate_file_upload, validate_json_input, 
+    log_request, error_handler, security_headers
+)
 
 # Load environment variables
 load_dotenv()
@@ -54,6 +58,11 @@ def health_check():
     })
 
 @app.route('/api/face/analyze', methods=['POST'])
+@rate_limit(max_requests=20, window=60)
+@validate_file_upload
+@log_request
+@error_handler
+@security_headers
 def analyze_face():
     """Analyze uploaded image and extract high-quality face descriptor"""
     try:
@@ -102,6 +111,11 @@ def analyze_face():
         }), 500
 
 @app.route('/api/face/analyze-url', methods=['POST'])
+@rate_limit(max_requests=20, window=60)
+@validate_json_input(['image_url'])
+@log_request
+@error_handler
+@security_headers
 def analyze_face_from_url():
     """Analyze face from image URL using advanced AI"""
     try:
@@ -155,6 +169,11 @@ def analyze_face_from_url():
         }), 500
 
 @app.route('/api/face/match', methods=['POST'])
+@rate_limit(max_requests=10, window=60)
+@validate_json_input(['user_descriptor', 'collection_descriptors'])
+@log_request
+@error_handler
+@security_headers
 def match_faces():
     """Match user face against photo collection using advanced AI"""
     try:
@@ -229,6 +248,11 @@ def match_faces():
 
 
 @app.route('/api/v2/analyze', methods=['POST'])
+@rate_limit(max_requests=20, window=60)
+@validate_file_upload
+@log_request
+@error_handler
+@security_headers
 def v2_analyze():
     """Analyze user image and return ArcFace embedding for V2 matching."""
     try:
@@ -262,6 +286,11 @@ def v2_analyze():
         return jsonify({'success': False, 'message': 'Internal error during analysis'}), 500
 
 @app.route('/api/v2/ingest', methods=['POST'])
+@rate_limit(max_requests=5, window=60)
+@validate_json_input(['event_id', 'photo_id'])
+@log_request
+@error_handler
+@security_headers
 def v2_ingest():
     """Ingest a photo (compute ArcFace embedding and add to FAISS), given event_id and either image_url or embedding."""
     try:
@@ -299,6 +328,11 @@ def v2_ingest():
 
 
 @app.route('/api/v2/match', methods=['POST'])
+@rate_limit(max_requests=10, window=60)
+@validate_json_input(['event_id', 'user_embedding'])
+@log_request
+@error_handler
+@security_headers
 def v2_match():
     """Match a user embedding against the FAISS index of an event (ArcFace)."""
     try:

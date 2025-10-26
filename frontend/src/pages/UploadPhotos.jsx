@@ -70,6 +70,11 @@ export default function UploadPhotos() {
       
       if (data.successful > 0) {
         toast.success(`Successfully uploaded ${data.successful} photos!`);
+        
+        // Redirect to dashboard after a short delay
+        setTimeout(() => {
+          navigate('/dashboard');
+        }, 2000); // 2 second delay to show success message
       }
       if (data.failed > 0) {
         toast.error(`${data.failed} photos failed to upload`);
@@ -417,10 +422,23 @@ export default function UploadPhotos() {
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              className={`mb-6 p-4 rounded-xl flex items-center gap-3 ${isLight ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-green-500/10 border border-green-500/30 text-green-300'}`}
+              className={`mb-6 p-4 rounded-xl ${isLight ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-green-500/10 border border-green-500/30 text-green-300'}`}
             >
-              <FaCheckCircle className="h-5 w-5" />
-              <span className="font-medium">Photos uploaded successfully!</span>
+              <div className="flex items-center gap-3 mb-3">
+                <FaCheckCircle className="h-5 w-5" />
+                <div className="flex-1">
+                  <div className="font-medium">Photos uploaded successfully!</div>
+                  <div className="text-sm opacity-80 mt-1">Redirecting to dashboard...</div>
+                </div>
+              </div>
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => navigate('/dashboard')}
+                className="w-full py-2 px-4 rounded-lg bg-green-600 hover:bg-green-700 text-white font-medium transition-colors"
+              >
+                Go to Dashboard Now
+              </motion.button>
             </motion.div>
           )}
 
