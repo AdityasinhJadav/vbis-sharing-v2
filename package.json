@@ -1,0 +1,34 @@
+{
+  "name": "facematch",
+  "version": "1.0.0",
+  "description": "Event Photo Face Matching Platform",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:flask": "cd flask-backend && python run_advanced.py",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build:frontend": "cd frontend && npm run build",
+    "lint": "cd frontend && npm run lint",
+    "lint:fix": "cd frontend && npm run lint:fix",
+    "clean": "cd backend && npm run clean && cd ../frontend && npm run clean",
+    "audit": "cd backend && npm audit && cd ../frontend && npm audit",
+    "audit:fix": "cd backend && npm audit fix && cd ../frontend && npm audit fix"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AdityasinhJadav/vbis-sharing-v2.git"
+  },
+  "keywords": [
+    "face-recognition",
+    "event-photos",
+    "face-matching",
+    "photo-sharing"
+  ],
+  "author": "FaceMatch Contributors",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

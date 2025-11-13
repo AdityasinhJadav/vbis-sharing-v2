@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "lint:fix": "eslint . --fix",
+    "preview": "vite preview",
+    "clean": "rm -rf dist node_modules/.vite",
+    "audit-fix": "npm audit fix",
+    "check-outdated": "npm outdated"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.13",
