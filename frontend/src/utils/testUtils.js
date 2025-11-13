@@ -158,6 +158,7 @@ export const performanceTests = {
     return {
       result,
       renderTime: end - start
+    };
   },
 
   // Test memory usage

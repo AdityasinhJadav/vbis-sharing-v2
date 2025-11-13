@@ -171,8 +171,8 @@ export const validateImageFile = (file, options = {}) => {
   const {
     maxSizeMB = 10,
     allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'],
-    maxWidth = 4000,
-    maxHeight = 4000
+    // maxWidth = 4000, // Commented out - not used
+    // maxHeight = 4000 // Commented out - not used
   } = options;
 
   const errors = [];

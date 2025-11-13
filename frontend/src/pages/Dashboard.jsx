@@ -2,13 +2,14 @@ import React, { useContext, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { FaCrown, FaUsers, FaPlus, FaCalendarAlt, FaEye, FaCode, FaSignOutAlt, FaUserCircle, FaUpload, FaTrash, FaTrashAlt, FaSearch, FaCog } from 'react-icons/fa';
 import { AuthContext } from '../auth/AuthContext';
-import { auth, db } from '../firebase';
-import { signOut } from 'firebase/auth';
+// import { auth, db } from '../firebase'; // Commented out unused imports
+import { db } from '../firebase';
+// import { signOut } from 'firebase/auth'; // Commented out - not used
 import { useNavigate } from 'react-router-dom';
-import { collection, query, where, limit, onSnapshot, doc, getDoc, setDoc, serverTimestamp, addDoc, getDocs, writeBatch, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, limit, onSnapshot, doc, getDoc, setDoc, serverTimestamp, addDoc, getDocs, writeBatch } from 'firebase/firestore';
 import { useTheme } from '../theme/ThemeContext';
 import { generateUniquePasscode, validatePasscode, checkPasscodeAvailability } from '../utils/eventUtils';
-import { flaskFaceService } from '../utils/flaskFaceApi';
+// import { flaskFaceService } from '../utils/flaskFaceApi'; // Commented out - not used
 import { quickBulkIngest } from '../utils/quickBulkIngest';
 import { createEventDeletionService } from '../utils/eventDeletionService';
 
@@ -49,79 +50,80 @@ const Dashboard = () => {
     return () => unsubscribe();
   }, [currentUser]);
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      setUserRole(null);
-      navigate('/login');
-    } catch (error) {
-      console.error('Logout error:', error);
-    }
-  };
+  // Commented out - not currently used but may be needed later
+  // const handleLogout = async () => {
+  //   try {
+  //     await signOut(auth);
+  //     setUserRole(null);
+  //     navigate('/login');
+  //   } catch (error) {
+  //     console.error('Logout error:', error);
+  //   }
+  // };
 
-  const refreshUserRole = async () => {
-    if (!currentUser) return;
-    
-    try {
-      const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-      if (userDoc.exists()) {
-        const role = userDoc.data().role || 'attendee';
-        localStorage.setItem('role', role);
-        setUserRole(role);
-        console.log('Role refreshed:', role);
-      }
-    } catch (error) {
-      console.error('Error refreshing role:', error);
-    }
-  };
+  // const refreshUserRole = async () => {
+  //   if (!currentUser) return;
+  //   
+  //   try {
+  //     const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+  //     if (userDoc.exists()) {
+  //       const role = userDoc.data().role || 'attendee';
+  //       localStorage.setItem('role', role);
+  //       setUserRole(role);
+  //       console.log('Role refreshed:', role);
+  //     }
+  //   } catch (error) {
+  //     console.error('Error refreshing role:', error);
+  //   }
+  // };
 
-  const bulkIngestEventPhotos = async (eventId) => {
-    try {
-      console.log(`🔄 Starting bulk ingest for event ${eventId}...`);
-      
-      // Get all photos for this event
-      const photosQuery = query(collection(db, 'photos'), where('event_id', '==', eventId));
-      const photosSnapshot = await getDocs(photosQuery);
-      
-      if (photosSnapshot.empty) {
-        console.log('No photos found for this event');
-        return;
-      }
-      
-      const photos = photosSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      console.log(`Found ${photos.length} photos to ingest`);
-      
-      let successCount = 0;
-      let failCount = 0;
-      
-      for (const photo of photos) {
-        try {
-          const ingestResult = await flaskFaceService.api.ingestPhoto(
-            eventId,
-            photo.id,
-            photo.cloudinaryUrl
-          );
-          
-          if (ingestResult.success) {
-            successCount++;
-            console.log(`✅ Ingested photo: ${photo.originalName}`);
-          } else {
-            failCount++;
-            console.warn(`⚠️ Failed to ingest photo: ${photo.originalName}`);
-          }
-        } catch (error) {
-          failCount++;
-          console.error(`❌ Error ingesting photo ${photo.originalName}:`, error);
-        }
-      }
-      
-      console.log(`🎉 Bulk ingest completed: ${successCount} success, ${failCount} failed`);
-      return { success: successCount, failed: failCount, total: photos.length };
-    } catch (error) {
-      console.error('Bulk ingest error:', error);
-      throw error;
-    }
-  };
+  // const bulkIngestEventPhotos = async (eventId) => {
+  //   try {
+  //     console.log(`🔄 Starting bulk ingest for event ${eventId}...`);
+  //     
+  //     // Get all photos for this event
+  //     const photosQuery = query(collection(db, 'photos'), where('event_id', '==', eventId));
+  //     const photosSnapshot = await getDocs(photosQuery);
+  //     
+  //     if (photosSnapshot.empty) {
+  //       console.log('No photos found for this event');
+  //       return;
+  //     }
+  //     
+  //     const photos = photosSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  //     console.log(`Found ${photos.length} photos to ingest`);
+  //     
+  //     let successCount = 0;
+  //     let failCount = 0;
+  //     
+  //     for (const photo of photos) {
+  //       try {
+  //         const ingestResult = await flaskFaceService.api.ingestPhoto(
+  //           eventId,
+  //           photo.id,
+  //           photo.cloudinaryUrl
+  //         );
+  //         
+  //         if (ingestResult.success) {
+  //           successCount++;
+  //           console.log(`✅ Ingested photo: ${photo.originalName}`);
+  //         } else {
+  //           failCount++;
+  //           console.warn(`⚠️ Failed to ingest photo: ${photo.originalName}`);
+  //         }
+  //       } catch (error) {
+  //         failCount++;
+  //         console.error(`❌ Error ingesting photo ${photo.originalName}:`, error);
+  //       }
+  //     }
+  //     
+  //     console.log(`🎉 Bulk ingest completed: ${successCount} success, ${failCount} failed`);
+  //     return { success: successCount, failed: failCount, total: photos.length };
+  //   } catch (error) {
+  //     console.error('Bulk ingest error:', error);
+  //     throw error;
+  //   }
+  // };
 
   const OrganizerDashboard = () => (
     <div className="space-y-6">
@@ -451,7 +453,7 @@ const Dashboard = () => {
                     organizerId: currentUser?.uid || null,
                     createdAt: serverTimestamp(),
                   };
-                  const ref = await addDoc(collection(db, 'events'), payload);
+                  await addDoc(collection(db, 'events'), payload);
                   // Close modal after creation
                   setShowCreateEvent(false);
                   setCreating(false);

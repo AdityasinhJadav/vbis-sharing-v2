@@ -62,7 +62,7 @@ class Cache {
     let expired = 0;
     let active = 0;
 
-    for (const [key, item] of this.cache.entries()) {
+    for (const [_key, item] of this.cache.entries()) {
       if (now > item.expiresAt) {
         expired++;
       } else {
