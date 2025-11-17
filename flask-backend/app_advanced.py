@@ -62,7 +62,7 @@ def health_check():
 @validate_file_upload
 @log_request
 @error_handler
-@security_headers
+@security_headers()
 def analyze_face():
     """Analyze uploaded image and extract high-quality face descriptor"""
     try:
@@ -115,7 +115,7 @@ def analyze_face():
 @validate_json_input(['image_url'])
 @log_request
 @error_handler
-@security_headers
+@security_headers()
 def analyze_face_from_url():
     """Analyze face from image URL using advanced AI"""
     try:
@@ -173,7 +173,7 @@ def analyze_face_from_url():
 @validate_json_input(['user_descriptor', 'collection_descriptors'])
 @log_request
 @error_handler
-@security_headers
+@security_headers()
 def match_faces():
     """Match user face against photo collection using advanced AI"""
     try:
@@ -252,7 +252,7 @@ def match_faces():
 @validate_file_upload
 @log_request
 @error_handler
-@security_headers
+@security_headers()
 def v2_analyze():
     """Analyze user image and return ArcFace embedding for V2 matching."""
     try:
@@ -290,7 +290,7 @@ def v2_analyze():
 @validate_json_input(['event_id', 'photo_id'])
 @log_request
 @error_handler
-@security_headers
+@security_headers()
 def v2_ingest():
     """Ingest a photo (compute ArcFace embedding and add to FAISS), given event_id and either image_url or embedding."""
     try:
@@ -332,7 +332,7 @@ def v2_ingest():
 @validate_json_input(['event_id', 'user_embedding'])
 @log_request
 @error_handler
-@security_headers
+@security_headers()
 def v2_match():
     """Match a user embedding against the FAISS index of an event (ArcFace)."""
     try:

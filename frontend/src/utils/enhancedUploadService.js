@@ -210,7 +210,7 @@ export class EnhancedUploadService {
     
     this.emit('faceProcessingStarted', { count: successfulUploads.length });
     
-    // Process faces in parallel (non-blocking)
+    // Process faces sequentially to avoid rate limiting
     const faceProcessingPromises = successfulUploads.map(async (result, index) => {
       try {
         this.emit('faceProcessingProgress', { 
@@ -224,11 +224,59 @@ export class EnhancedUploadService {
         console.log(`   Photo ID: ${result.photoDocId}`);
         console.log(`   Image URL: ${result.cloudinaryResponse.secure_url}`);
         
-        const ingestResult = await flaskFaceService.api.ingestPhoto(
-          result.options.eventId,
-          result.photoDocId,
-          result.cloudinaryResponse.secure_url
-        );
+        // Add delay to avoid rate limiting (5 requests per minute = 12 seconds between requests)
+        if (index > 0) {
+          console.log(`⏳ Waiting 15 seconds to avoid rate limiting...`);
+          await new Promise(resolve => setTimeout(resolve, 15000));
+        }
+        
+        console.log(`🔗 Flask service URL: ${flaskFaceService.api.baseURL}`);
+        console.log(`📡 Making ingest request to: ${flaskFaceService.api.baseURL}/api/v2/ingest`);
+        
+        // Retry logic for rate limit errors
+        let ingestResult;
+        let retryCount = 0;
+        const maxRetries = 3;
+        
+        while (retryCount < maxRetries) {
+          try {
+            ingestResult = await flaskFaceService.api.ingestPhoto(
+              result.options.eventId,
+              result.photoDocId,
+              result.cloudinaryResponse.secure_url
+            );
+            
+            console.log(`📊 Ingest API response:`, ingestResult);
+            
+            if (ingestResult.success) {
+              break; // Success, exit retry loop
+            } else if (ingestResult.message && ingestResult.message.includes('Rate limit exceeded')) {
+              retryCount++;
+              if (retryCount < maxRetries) {
+                const waitTime = 30 * retryCount; // Exponential backoff: 30s, 60s, 90s
+                console.log(`⏳ Rate limit hit, waiting ${waitTime} seconds before retry ${retryCount}/${maxRetries}...`);
+                await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
+                continue;
+              }
+            }
+            break; // Exit retry loop for non-rate-limit errors
+          } catch (error) {
+            if (error.message && error.message.includes('Rate limit exceeded')) {
+              retryCount++;
+              if (retryCount < maxRetries) {
+                const waitTime = 30 * retryCount;
+                console.log(`⏳ Rate limit error, waiting ${waitTime} seconds before retry ${retryCount}/${maxRetries}...`);
+                await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
+                continue;
+              }
+            }
+            throw error; // Re-throw non-rate-limit errors
+          }
+        }
+        
+        if (!ingestResult.success) {
+          console.error(`❌ Ingest failed for ${result.photoDocId} after ${retryCount} retries:`, ingestResult);
+        }
         
         console.log(`✅ Photo ${index + 1} ingestion result:`, ingestResult);
         
@@ -239,7 +287,12 @@ export class EnhancedUploadService {
         
         return { success: true, result };
       } catch (error) {
-        console.warn(`Face processing failed for ${result.file.name}:`, error);
+        console.error(`❌ Face processing failed for ${result.file.name}:`, error);
+        console.error(`   Event ID: ${result.options.eventId}`);
+        console.error(`   Photo ID: ${result.photoDocId}`);
+        console.error(`   Image URL: ${result.cloudinaryResponse.secure_url}`);
+        console.error(`   Error details:`, error);
+        
         this.emit('faceProcessingError', { 
           index: index + 1, 
           fileName: result.file.name, 
@@ -334,6 +387,7 @@ export class EnhancedUploadService {
       }
 
       // Start background face processing
+      console.log(`🚀 Starting automatic face processing for ${results.filter(r => r.success).length} photos...`);
       this.processFacesInBackground(results);
 
       this.emit('uploadComplete', { 
