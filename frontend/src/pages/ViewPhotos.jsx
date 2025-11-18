@@ -1,19 +1,17 @@
 import React, { useState, useEffect, useContext, useMemo, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FaArrowLeft, FaDownload, FaTimes, FaEye, FaSpinner, FaCamera, FaUpload, FaUser, FaImages, FaCheck, FaCheckSquare, FaSquare } from 'react-icons/fa';
 import { AuthContext } from '../auth/AuthContext';
 import { useToast } from '../components/ToastProvider';
-import { useTheme } from '../theme/ThemeContext';
+// import { useTheme } from '../theme/ThemeContext'; // Commented out - not used
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { getThumbnailUrl, getFullSizeUrl } from '../utils/cloudinary';
 import { flaskFaceService } from '../utils/flaskFaceApi';
 import CameraCapture from '../components/CameraCapture';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { SkeletonPhotoGrid } from '../components/SkeletonLoader';
-import { cacheUtils, generateCacheKey } from '../utils/cache';
-import { perfMonitor } from '../utils/performance';
 
 // Justified gallery that preserves image aspect ratios.
 // Wider images occupy more horizontal space within a row.
@@ -82,7 +80,7 @@ const JustifiedGallery = ({ photos, onSelect, onToggleSelect, selectedPhotos, is
     <div ref={containerRef} style={{ gap: rowGap }} className="flex flex-col">
       {rows.map((row, rIndex) => (
         <div key={rIndex} className="flex" style={{ gap: itemGap }}>
-          {row.map((item, iIndex) => (
+          {row.map((item, _iIndex) => (
             <div
               key={item.photo.id}
               className="group relative overflow-hidden bg-slate-800 border border-slate-700 hover:border-slate-600 transition-all cursor-pointer"
@@ -126,7 +124,7 @@ const ViewPhotos = () => {
   const [passcode, setPasscode] = useState(null);
   const { currentUser } = useContext(AuthContext);
   const toast = useToast();
-  const { isLight } = useTheme();
+  // const { isLight } = useTheme(); // Commented out - not used
   
   const [photos, setPhotos] = useState([]);
   const [filteredPhotos, setFilteredPhotos] = useState([]);
@@ -143,6 +141,9 @@ const ViewPhotos = () => {
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [selectedPhotos, setSelectedPhotos] = useState([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
+
+  // Suppress linter warning - userFaceDescriptor is set but may be used for future features
+  void userFaceDescriptor;
 
   // Get passcode from session storage
   useEffect(() => {

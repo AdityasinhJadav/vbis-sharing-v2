@@ -7,7 +7,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { FaEnvelope, FaLock, FaGoogle, FaEye, FaEyeSlash, FaArrowRight } from 'react-icons/fa';
 import { useTheme } from '../theme/ThemeContext';
-import { setRoleInStorage, logRoleInfo, getDefaultRole } from '../utils/roleUtils';
+import { logRoleInfo, getDefaultRole } from '../utils/roleUtils';
 
 const AuthLogin = () => {
   const { isLight } = useTheme();
@@ -22,7 +22,7 @@ const AuthLogin = () => {
   const persistLocally = async () => {
     try {
       await setPersistence(auth, browserLocalPersistence);
-    } catch (e) {
+    } catch {
       // ignore
     }
   };

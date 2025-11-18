@@ -516,7 +516,7 @@ export class FlaskFaceRecognitionService {
   }
 
   // Compare two face descriptors
-  compareFaces(descriptor1, descriptor2, threshold = 0.6) {
+  compareFaces(descriptor1, descriptor2, _threshold = 0.6) {
     // This is now handled by the backend, but we keep this for compatibility
     return {
       match: false, // Will be determined by backend

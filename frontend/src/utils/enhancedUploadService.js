@@ -2,7 +2,6 @@
  * Enhanced Upload Service with Parallel Processing, Pause/Resume, and Background Processing
  */
 
-import { uploadToCloudinary } from './cloudinary';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { flaskFaceService } from './flaskFaceApi';
@@ -60,7 +59,7 @@ export class EnhancedUploadService {
         
         // Calculate compression ratio needed
         const currentSizeMB = file.size / (1024 * 1024);
-        const compressionRatio = Math.sqrt(maxSizeMB / currentSizeMB);
+        const _compressionRatio = Math.sqrt(maxSizeMB / currentSizeMB);
         
         // Apply compression
         if (width > maxWidth || height > maxHeight) {

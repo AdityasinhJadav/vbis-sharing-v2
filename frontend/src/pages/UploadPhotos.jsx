@@ -6,9 +6,7 @@ import { useToast } from "../components/ToastProvider";
 import { useTheme } from "../theme/ThemeContext";
 import { motion } from "framer-motion";
 import { FaUpload, FaImage, FaArrowLeft, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
-import { flaskFaceService } from '../utils/flaskFaceApi';
-import { uploadToCloudinary } from "../utils/cloudinary";
-import { collection, addDoc, serverTimestamp, query, where, getDocs } from "firebase/firestore";
+import { collection, query, where, getDocs } from "firebase/firestore";
 import { enhancedUploadService } from '../utils/enhancedUploadService';
 
 export default function UploadPhotos() {
@@ -29,9 +27,9 @@ export default function UploadPhotos() {
   
   // Enhanced upload states
   const [isPaused, setIsPaused] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState('idle'); // 'idle', 'uploading', 'paused', 'completed'
+  const [uploadStatus, setUploadStatus] = useState('idle'); // 'idle', 'uploading', 'paused', 'completed' - Used by event handlers
   const [fileProgress, setFileProgress] = useState({});
-  const [uploadResults, setUploadResults] = useState([]);
+  const [uploadResults, setUploadResults] = useState([]); // Used by event handlers for potential UI display
   const [faceProcessingStatus, setFaceProcessingStatus] = useState({ active: false, progress: 0 });
 
   // Enhanced upload event handlers
@@ -56,7 +54,7 @@ export default function UploadPhotos() {
       }));
     };
 
-    const handleBatchComplete = (data) => {
+    const handleBatchComplete = (_data) => {
       const completed = Object.values(fileProgress).filter(p => p.stage === 'complete').length;
       const total = files.length;
       setUploadProgress(Math.round((completed / total) * 100));
@@ -129,7 +127,7 @@ export default function UploadPhotos() {
   }, [files.length, fileProgress]);
 
   // Image compression utility
-  const compressImage = (file, maxSizeMB = 8, quality = 0.8) => {
+  const compressImage = (file, _maxSizeMB = 8, quality = 0.8) => {
     return new Promise((resolve) => {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
@@ -273,6 +271,11 @@ export default function UploadPhotos() {
     setUploadStatus('idle');
     toast.info('Upload cancelled');
   };
+
+  // Suppress linter warnings for state variables that are set but may not be directly read
+  // They're used by event handlers and may be displayed in future UI enhancements
+  void uploadStatus;
+  void uploadResults;
 
   return (
     <div className="min-h-screen bg-slate-900 relative overflow-x-hidden pt-24 pb-10 px-4">
