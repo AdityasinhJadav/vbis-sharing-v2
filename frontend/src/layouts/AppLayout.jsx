@@ -1,24 +1,14 @@
 import { useLocation } from 'react-router-dom'
 import Navbar from '../components/Navbar'
-import { auth } from '../firebase'
-import { onAuthStateChanged, signOut } from 'firebase/auth'
-import { useEffect, useState } from 'react'
 
 export default function AppLayout({ children }) {
   const location = useLocation()
   const isHome = location.pathname === '/'
-  const isAuth = location.pathname === '/login' || location.pathname === '/signup'
-  const [user, setUser] = useState(null)
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, setUser)
-    return () => unsub()
-  }, [])
+  const isAuth = location.pathname === '/login' || location.pathname === '/signup' || location.pathname === '/setup-username'
 
   return (
     <div className="min-h-screen bg-slate-900">
-      {!isHome && (
-        <Navbar user={user} onLogout={() => signOut(auth)} />
-      )}
+      {!isHome && !isAuth && <Navbar />}
       <main className={
         isHome
           ? ''

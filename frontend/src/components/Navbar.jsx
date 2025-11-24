@@ -1,7 +1,7 @@
 import { useState, useEffect, useContext } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { FaFingerprint, FaBars, FaTimes, FaTachometerAlt, FaSignInAlt, FaUserPlus, FaSun, FaMoon, FaCamera } from 'react-icons/fa';
+import { motion as Motion } from 'framer-motion';
+import { FaFingerprint, FaBars, FaTimes, FaTachometerAlt, FaSignInAlt, FaUserPlus, FaSun, FaMoon, FaCamera, FaSignOutAlt } from 'react-icons/fa';
 import { AuthContext } from '../auth/AuthContext';
 import { useTheme } from '../theme/ThemeContext';
 
@@ -9,7 +9,7 @@ const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const location = useLocation();
-  const { currentUser } = useContext(AuthContext);
+  const { currentUser, logout } = useContext(AuthContext);
   const { isLight, toggleTheme } = useTheme();
 
   useEffect(() => {
@@ -52,7 +52,7 @@ const Navbar = () => {
   };
 
   return (
-    <motion.nav
+    <Motion.nav
       initial={{ y: -100 }}
       animate={{ y: 0 }}
       className={`fixed w-full z-50 transition-all duration-300 bg-slate-900/95 backdrop-blur-sm
@@ -62,12 +62,12 @@ const Navbar = () => {
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
           <Link to="/" className="flex items-center space-x-3">
-            <motion.div
+            <Motion.div
               whileHover={{ rotate: 180 }}
               transition={{ duration: 0.3 }}
             >
               <FaCamera className="h-8 w-8 text-sky-400" />
-            </motion.div>
+            </Motion.div>
             <span className="text-xl font-bold text-white">
               FaceMatch
             </span>
@@ -85,6 +85,19 @@ const Navbar = () => {
                 {link.label}
               </Link>
             ))}
+            {currentUser && (
+              <button
+                onClick={logout}
+                className={`flex items-center px-4 py-2 rounded-lg transition-all duration-300 ${
+                  scrolled
+                    ? 'text-slate-900 hover:bg-slate-200 font-nunito'
+                    : 'text-slate-200 hover:bg-slate-800 font-nunito'
+                }`}
+              >
+                <span className="mr-2"><FaSignOutAlt /></span>
+                Sign Out
+              </button>
+            )}
             {/* Theme toggle */}
             <button
               onClick={toggleTheme}
@@ -114,7 +127,7 @@ const Navbar = () => {
         </div>
 
         {/* Mobile Navigation */}
-        <motion.div
+        <Motion.div
           initial={false}
           animate={{ height: isOpen ? 'auto' : 0 }}
           className={`md:hidden overflow-hidden ${
@@ -133,6 +146,17 @@ const Navbar = () => {
                 {link.label}
               </Link>
             ))}
+            {currentUser && (
+              <button
+                onClick={() => { logout(); setIsOpen(false); }}
+                className={`w-full flex items-center px-3 py-2 rounded-lg transition-colors duration-300 ${
+                  scrolled ? 'text-slate-900 hover:bg-slate-200' : 'text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <span className="mr-2"><FaSignOutAlt /></span>
+                Sign Out
+              </button>
+            )}
             {/* Mobile theme toggle */}
             <div className="pt-2">
               <button
@@ -148,9 +172,9 @@ const Navbar = () => {
               </button>
             </div>
           </div>
-        </motion.div>
+        </Motion.div>
       </div>
-    </motion.nav>
+    </Motion.nav>
   );
 };
 

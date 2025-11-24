@@ -1,786 +1,588 @@
-import React, { useContext, useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
-import { FaCrown, FaUsers, FaPlus, FaCalendarAlt, FaEye, FaCode, FaSignOutAlt, FaUserCircle, FaUpload, FaTrash, FaTrashAlt, FaSearch, FaCog } from 'react-icons/fa';
-import { AuthContext } from '../auth/AuthContext';
-import { auth, db } from '../firebase';
-import { signOut } from 'firebase/auth';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, query, where, limit, onSnapshot, doc, getDoc, setDoc, serverTimestamp, addDoc, getDocs, writeBatch, deleteDoc } from 'firebase/firestore';
+import { motion as Motion, AnimatePresence } from 'framer-motion';
+import { 
+  FaDoorOpen, FaEye, FaPlus, FaUpload, FaUsers, FaCopy, 
+  FaCheck, FaTimes, FaRocket, FaInbox, FaEdit
+} from 'react-icons/fa';
+import { useAuth } from '../auth/AuthContext';
+import { createRoom, myRooms, joinRoom, getJoinedRooms } from '../api';
 import { useTheme } from '../theme/ThemeContext';
-import { generateUniquePasscode, validatePasscode, checkPasscodeAvailability } from '../utils/eventUtils';
-import { flaskFaceService } from '../utils/flaskFaceApi';
-import { quickBulkIngest } from '../utils/quickBulkIngest';
-import { createEventDeletionService } from '../utils/eventDeletionService';
+import LoadingSpinner from '../components/LoadingSpinner';
+import { SkeletonCard } from '../components/SkeletonLoader';
 
 const Dashboard = () => {
+  const { currentUser } = useAuth();
   const { isLight } = useTheme();
-  const { currentUser } = useContext(AuthContext);
-  const [userRole, setUserRole] = useState(null);
   const navigate = useNavigate();
-  // Enter-code modal state
-  const [showEnterCode, setShowEnterCode] = useState(false);
-  const [eventCode, setEventCode] = useState('');
-  const [entering, setEntering] = useState(false);
-  const [enterError, setEnterError] = useState('');
-  // Create-event modal state
-  const [showCreateEvent, setShowCreateEvent] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState('');
-  const [newEventName, setNewEventName] = useState('');
-  const [newEventDate, setNewEventDate] = useState('');
-  const [newEventLocation, setNewEventLocation] = useState('');
-  const [newEventPasscode, setNewEventPasscode] = useState('');
+
+  const [myRoomsList, setMyRoomsList] = useState([]);
+  const [joinedRoomsList, setJoinedRoomsList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [roomName, setRoomName] = useState('');
+  const [roomDescription, setRoomDescription] = useState('');
+  const [joinCode, setJoinCode] = useState('');
+  const [actionMessage, setActionMessage] = useState('');
+  const [copiedCode, setCopiedCode] = useState(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   useEffect(() => {
-    if (!currentUser) return;
-    console.log('Dashboard: Subscribing to role for user:', currentUser.email);
-    const unsubscribe = onSnapshot(
-      doc(db, 'users', currentUser.uid),
-      (snap) => {
-        const role = (snap.exists() ? snap.data().role : undefined) || 'attendee';
-        console.log('Dashboard: Role from Firestore snapshot:', role);
-        setUserRole(role);
-      },
-      (err) => {
-        console.error('Dashboard: Role subscription error:', err);
-        setUserRole('attendee');
+    const load = async () => {
+      if (!currentUser) return;
+      try {
+        setLoading(true);
+        setError('');
+        if (currentUser.role === 'organizer') {
+          setMyRoomsList(await myRooms());
+        } else {
+          setJoinedRoomsList(await getJoinedRooms());
+        }
+      } catch (err) {
+        setError(err.message || 'Failed to load dashboard data');
+      } finally {
+        setLoading(false);
       }
-    );
-    return () => unsubscribe();
+    };
+    load();
   }, [currentUser]);
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      setUserRole(null);
-      navigate('/login');
-    } catch (error) {
-      console.error('Logout error:', error);
+  const handleCreateRoom = async (e) => {
+    e.preventDefault();
+    if (!roomName.trim() || isCreating) return;
+    
+    // Validation
+    if (roomName.trim().length < 3) {
+      setError('Room name must be at least 3 characters');
+      return;
     }
-  };
-
-  const refreshUserRole = async () => {
-    if (!currentUser) return;
+    if (roomName.trim().length > 100) {
+      setError('Room name must be less than 100 characters');
+      return;
+    }
+    if (roomDescription.trim().length > 500) {
+      setError('Description must be less than 500 characters');
+      return;
+    }
     
     try {
-      const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-      if (userDoc.exists()) {
-        const role = userDoc.data().role || 'attendee';
-        localStorage.setItem('role', role);
-        setUserRole(role);
-        console.log('Role refreshed:', role);
-      }
-    } catch (error) {
-      console.error('Error refreshing role:', error);
+      setIsCreating(true);
+      setActionMessage('');
+      setError('');
+      const room = await createRoom(roomName.trim(), roomDescription.trim() || undefined);
+      setMyRoomsList(prev => [room, ...prev]);
+      setRoomName('');
+      setRoomDescription('');
+      setShowCreateModal(false);
+      setActionMessage(`Successfully created "${room.name}"`);
+      setTimeout(() => setActionMessage(''), 5000);
+    } catch (err) {
+      setError(err.message || 'Failed to create room');
+    } finally {
+      setIsCreating(false);
     }
   };
 
-  const bulkIngestEventPhotos = async (eventId) => {
+  const handleJoinRoom = async (e) => {
+    e.preventDefault();
+    if (!joinCode.trim() || isJoining) return;
     try {
-      console.log(`🔄 Starting bulk ingest for event ${eventId}...`);
-      
-      // Get all photos for this event
-      const photosQuery = query(collection(db, 'photos'), where('event_id', '==', eventId));
-      const photosSnapshot = await getDocs(photosQuery);
-      
-      if (photosSnapshot.empty) {
-        console.log('No photos found for this event');
-        return;
-      }
-      
-      const photos = photosSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      console.log(`Found ${photos.length} photos to ingest`);
-      
-      let successCount = 0;
-      let failCount = 0;
-      
-      for (const photo of photos) {
-        try {
-          const ingestResult = await flaskFaceService.api.ingestPhoto(
-            eventId,
-            photo.id,
-            photo.cloudinaryUrl
-          );
-          
-          if (ingestResult.success) {
-            successCount++;
-            console.log(`✅ Ingested photo: ${photo.originalName}`);
-          } else {
-            failCount++;
-            console.warn(`⚠️ Failed to ingest photo: ${photo.originalName}`);
-          }
-        } catch (error) {
-          failCount++;
-          console.error(`❌ Error ingesting photo ${photo.originalName}:`, error);
-        }
-      }
-      
-      console.log(`🎉 Bulk ingest completed: ${successCount} success, ${failCount} failed`);
-      return { success: successCount, failed: failCount, total: photos.length };
-    } catch (error) {
-      console.error('Bulk ingest error:', error);
-      throw error;
+      setIsJoining(true);
+      setActionMessage('');
+      setError('');
+      const response = await joinRoom(joinCode.trim().toUpperCase());
+      setJoinedRoomsList(prev => {
+        const exists = prev.some(r => r.id === response.room.id);
+        return exists ? prev : [response.room, ...prev];
+      });
+      setJoinCode('');
+      setActionMessage(`Successfully joined "${response.room.name}"`);
+      setTimeout(() => setActionMessage(''), 5000);
+    } catch (err) {
+      setError(err.message || 'Failed to join room');
+    } finally {
+      setIsJoining(false);
     }
   };
 
-  const OrganizerDashboard = () => (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className={`rounded-2xl p-6 ${isLight ? 'bg-gradient-to-r from-slate-700 to-slate-800 text-white' : 'bg-gradient-to-r from-slate-800 to-slate-900 text-white border border-slate-600/30'}`}>
-        <div className="flex items-center space-x-3 mb-4">
-          <FaCrown className="h-8 w-8 text-yellow-300" />
-          <h1 className="text-3xl font-bold">Organizer Dashboard</h1>
+  const copyToClipboard = async (code) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedCode(code);
+      setTimeout(() => setCopiedCode(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  const RoomCard = ({ room, isOrganizer, index = 0 }) => (
+    <div
+      className={`rounded-lg border ${
+        isLight 
+          ? 'bg-white border-slate-200 hover:border-slate-300' 
+          : 'bg-slate-800 border-slate-700 hover:border-slate-600'
+      } transition-colors`}
+    >
+      <div className="p-5">
+        <div className="mb-4">
+          <h3 className={`text-lg font-semibold mb-1 ${
+            isLight ? 'text-slate-900' : 'text-white'
+          }`}>
+            {room.name}
+          </h3>
+          {room.description && (
+            <p className={`text-sm mb-3 line-clamp-2 ${
+              isLight ? 'text-slate-600' : 'text-slate-400'
+            }`}>
+              {room.description}
+            </p>
+          )}
+          <div className="flex items-center gap-2">
+            <span className={`text-xs ${
+              isLight ? 'text-slate-500' : 'text-slate-400'
+            }`}>
+              Code:
+            </span>
+            <div className={`flex items-center gap-2 px-2 py-1 rounded ${
+              isLight ? 'bg-slate-100' : 'bg-slate-700'
+            }`}>
+              <span className="font-mono text-sm font-medium text-sky-500">
+                {room.code}
+              </span>
+              <button
+                onClick={() => copyToClipboard(room.code)}
+                className="p-1 rounded hover:bg-slate-600 transition-colors"
+                title="Copy code"
+              >
+                {copiedCode === room.code ? (
+                  <FaCheck className="w-3 h-3 text-emerald-400" />
+                ) : (
+                  <FaCopy className="w-3 h-3 text-slate-400 hover:text-sky-400 transition-colors" />
+                )}
+              </button>
+            </div>
+          </div>
         </div>
-        <p className={`${isLight ? 'text-slate-100/90' : 'text-slate-100'}`}>Manage your events and photo sharing</p>
+
+        <div className="flex gap-2 pt-3 border-t border-slate-700">
+          {isOrganizer && (
+            <button
+              onClick={() => navigate(`/upload/${room.id}`, { state: { room } })}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium transition-colors"
+            >
+              <FaUpload className="w-3.5 h-3.5" /> Upload
+            </button>
+          )}
+          <button
+            onClick={() => navigate(`/photos/${room.id}`, { state: { room } })}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium transition-colors"
+          >
+            <FaEye className="w-3.5 h-3.5" /> View
+          </button>
+        </div>
       </div>
-
-      {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6">
-        <motion.div
-          whileHover={{ scale: 1.05 }}
-          onClick={() => { setCreateError(''); setNewEventName(''); setNewEventDate(''); setShowCreateEvent(true); }}
-          className={`rounded-xl p-6 cursor-pointer transition-all border ${isLight ? 'bg-white border-slate-200 hover:border-purple-300' : 'bg-slate-800 border-slate-700 hover:border-purple-400'}`}
-        >
-          <div className="flex items-center space-x-4">
-            <div className={`${isLight ? 'bg-purple-500/10' : 'bg-purple-500/20'} p-3 rounded-lg`}>
-              <FaPlus className={`h-6 w-6 ${isLight ? 'text-purple-600' : 'text-purple-400'}`} />
-            </div>
-            <div>
-              <h3 className={`text-lg font-semibold ${isLight ? 'text-slate-900' : 'text-white'}`}>Create Event</h3>
-              <p className={`${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Start a new photo sharing event</p>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div
-          whileHover={{ scale: 1.05 }}
-          onClick={() => navigate('/upload')}
-          className={`rounded-xl p-6 cursor-pointer transition-all border ${isLight ? 'bg-white border-slate-200 hover:border-green-300 hover:shadow-lg' : 'bg-slate-800 border-slate-700 hover:border-green-400 hover:shadow-xl'}`}
-        >
-          <div className="flex items-center space-x-4">
-            <div className={`${isLight ? 'bg-green-500/10' : 'bg-green-500/20'} p-3 rounded-lg`}>
-              <FaUpload className={`h-6 w-6 ${isLight ? 'text-green-600' : 'text-green-400'}`} />
-            </div>
-            <div>
-              <h3 className={`text-lg font-semibold ${isLight ? 'text-slate-900' : 'text-white'}`}>Upload Photos</h3>
-              <p className={`${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Add photos to your events</p>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div
-          whileHover={{ scale: 1.05 }}
-          onClick={async () => {
-            try {
-              console.log('🔄 Starting bulk ingest...');
-              const result = await quickBulkIngest();
-              if (result.totalSuccess > 0) {
-                alert(`✅ Bulk ingest completed! ${result.totalSuccess} photos are now ready for face matching.`);
-              } else {
-                alert('⚠️ No photos were ingested. Check console for details.');
-              }
-            } catch (error) {
-              console.error('Bulk ingest error:', error);
-              alert('❌ Bulk ingest failed. Check console for details.');
-            }
-          }}
-          className={`rounded-xl p-6 cursor-pointer transition-all border ${isLight ? 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-lg' : 'bg-slate-800 border-slate-700 hover:border-blue-400 hover:shadow-xl'}`}
-        >
-          <div className="flex items-center space-x-4">
-            <div className={`${isLight ? 'bg-blue-500/10' : 'bg-blue-500/20'} p-3 rounded-lg`}>
-              <FaCog className={`h-6 w-6 ${isLight ? 'text-blue-600' : 'text-blue-400'}`} />
-            </div>
-            <div>
-              <h3 className={`text-lg font-semibold ${isLight ? 'text-slate-900' : 'text-white'}`}>Bulk Ingest Photos</h3>
-              <p className={`${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Process existing photos for face matching</p>
-            </div>
-          </div>
-        </motion.div>
-      </div>
-
-      {/* Recent Events */}
-      <RecentEvents mode="organizer" />
     </div>
   );
 
-  const AttendeeDashboard = () => (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className={`rounded-2xl p-6 ${isLight ? 'bg-sky-600 text-white' : 'bg-gradient-to-r from-sky-600 to-blue-800 text-white'}`}>
-        <div className="flex items-center space-x-3 mb-4">
-          <FaUsers className="h-8 w-8 text-sky-300" />
-          <h1 className="text-3xl font-bold">Attendee Dashboard</h1>
+  const EmptyState = ({ icon: Icon, title, description, actionLabel, onAction }) => (
+    <div className={`text-center py-12 px-6 rounded-lg border ${
+      isLight 
+        ? 'bg-white border-slate-200' 
+        : 'bg-slate-800 border-slate-700'
+    }`}
+    >
+      <div className="flex justify-center mb-4">
+        <div className={`p-3 rounded-full ${
+          isLight ? 'bg-slate-100' : 'bg-slate-700'
+        }`}>
+          <Icon className={`w-6 h-6 ${
+            isLight ? 'text-slate-400' : 'text-slate-500'
+          }`} />
         </div>
-        <p className={`${isLight ? 'text-sky-100/90' : 'text-sky-100'}`}>Join events and view shared photos</p>
       </div>
-
-      {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <motion.div
-          whileHover={{ scale: 1.05 }}
-          onClick={() => { 
-            console.log('Enter Event Code clicked!');
-            setEnterError(''); 
-            setEventCode(''); 
-            setShowEnterCode(true); 
-          }}
-          className={`rounded-xl p-6 cursor-pointer transition-all border ${isLight ? 'bg-white border-slate-200 hover:border-sky-300' : 'bg-slate-800 border-slate-700 hover:border-sky-400'}`}
+      <h3 className={`text-lg font-semibold mb-2 ${
+        isLight ? 'text-slate-900' : 'text-white'
+      }`}>
+        {title}
+      </h3>
+      <p className={`text-sm mb-6 ${
+        isLight ? 'text-slate-600' : 'text-slate-400'
+      }`}>
+        {description}
+      </p>
+      {onAction && actionLabel && (
+        <button
+          onClick={onAction}
+          className="px-5 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white font-medium transition-colors"
         >
-          <div className="flex items-center space-x-4">
-            <div className={`${isLight ? 'bg-sky-500/10' : 'bg-sky-500/20'} p-3 rounded-lg`}>
-              <FaCode className={`h-6 w-6 ${isLight ? 'text-sky-600' : 'text-sky-400'}`} />
-            </div>
-            <div>
-              <h3 className={`text-lg font-semibold ${isLight ? 'text-slate-900' : 'text-white'}`}>Enter Event Code</h3>
-              <p className={`${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Join an event with a code</p>
-            </div>
-          </div>
-        </motion.div>
-        
-        <motion.div
-          whileHover={{ scale: 1.05 }}
-          onClick={() => navigate('/face-match')}
-          className={`rounded-xl p-6 cursor-pointer transition-all border ${isLight ? 'bg-white border-slate-200 hover:border-purple-300' : 'bg-slate-800 border-slate-700 hover:border-purple-400'}`}
-        >
-          <div className="flex items-center space-x-4">
-            <div className={`${isLight ? 'bg-purple-500/10' : 'bg-purple-500/20'} p-3 rounded-lg`}>
-              <FaSearch className={`h-6 w-6 ${isLight ? 'text-purple-600' : 'text-purple-400'}`} />
-            </div>
-            <div>
-              <h3 className={`text-lg font-semibold ${isLight ? 'text-slate-900' : 'text-white'}`}>Find Your Photos</h3>
-              <p className={`${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Use face matching to find photos of you</p>
-            </div>
-          </div>
-        </motion.div>
-      </div>
-
-      {/* Joined Events */}
-      <RecentEvents mode="attendee" />
+          {actionLabel}
+        </button>
+      )}
     </div>
   );
+
+  useEffect(() => {
+    // Redirect to username setup if user doesn't have a username
+    if (currentUser && !currentUser.username) {
+      navigate('/setup-username');
+    }
+  }, [currentUser, navigate]);
+
+  if (!currentUser) return null;
+
+  // Don't render dashboard if username is missing (will redirect)
+  if (!currentUser.username) return null;
+
+  const isOrganizer = currentUser.role === 'organizer';
 
   return (
-    <div className={isLight ? `min-h-screen bg-slate-900 text-white` : `min-h-screen bg-slate-900 text-white`}>
-
-      {/* Main Content */}
-      <main className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pt-24`}>
-        {userRole === 'organizer' ? <OrganizerDashboard /> : <AttendeeDashboard />}
-      </main>
-
-      {/* Enter Event Code Modal */}
-      {showEnterCode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          {/* Backdrop */}
-          <div
-            className={`absolute inset-0 ${isLight ? 'bg-black/30' : 'bg-black/60'}`}
-            onClick={() => !entering && setShowEnterCode(false)}
-          />
-          {/* Dialog */}
-          <div className={`relative z-10 w-full max-w-md mx-auto rounded-2xl border p-6 shadow-2xl ${
-            isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-slate-800 border-slate-700 text-white'
-          }`}>
-            <h3 className="text-xl font-semibold mb-2">Enter Event Code</h3>
-            <p className={`${isLight ? 'text-slate-600' : 'text-slate-400'} text-sm mb-4`}>
-              Enter the 6-character code provided by the organizer.
-            </p>
-            {enterError && (
-              <div className={`mb-3 text-sm rounded-md px-3 py-2 border ${
-                isLight ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+    <div className={`min-h-screen pt-24 pb-12 px-4 ${
+      isLight ? 'bg-slate-50' : 'bg-slate-900'
+    }`}>
+      <div className="max-w-7xl mx-auto space-y-6">
+        {/* Header Section */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h1 className={`text-3xl font-bold mb-1 ${
+                isLight ? 'text-slate-900' : 'text-white'
               }`}>
-                {enterError}
-              </div>
-            )}
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                setEnterError('');
-                const code = eventCode.trim().toUpperCase();
-                if (!/^[A-Z0-9]{4,8}$/.test(code)) {
-                  setEnterError('Please enter a valid code (4-8 alphanumeric characters).');
-                  return;
-                }
-                setEntering(true);
-                try {
-                  const q = query(collection(db, 'events'), where('passcode', '==', code), limit(1));
-                  const unsub = onSnapshot(
-                    q,
-                    async (snap) => {
-                      // one-time fetch then unsubscribe
-                      unsub();
-                      if (snap.empty) {
-                        setEnterError('No event found for that code.');
-                        setEntering(false);
-                        return;
-                      }
-                      const evDoc = snap.docs[0];
-                      const eventId = evDoc.id;
-                      // Record joined event for this user (idempotent)
-                      if (currentUser?.uid) {
-                        const joinId = `${currentUser.uid}_${eventId}`;
-                        await setDoc(
-                          doc(db, 'userJoinedEvents', joinId),
-                          {
-                            userId: currentUser.uid,
-                            eventId,
-                            passcode: code,
-                            joinedAt: serverTimestamp(),
-                          },
-                          { merge: true }
-                        );
-                      }
-                      // Store passcode in session storage and navigate to photos
-                      sessionStorage.setItem('currentEventPasscode', code);
-                      navigate('/photos');
-                      setEntering(false);
-                      setShowEnterCode(false);
-                    },
-                    (err) => {
-                      console.error(err);
-                      setEnterError('Failed to verify code. Please try again.');
-                      setEntering(false);
-                    }
-                  );
-                } catch (err) {
-                  console.error(err);
-                  setEnterError('Something went wrong.');
-                  setEntering(false);
-                }
-              }}
-            >
-              <input
-                type="text"
-                inputMode="text"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="e.g. A1B2C3"
-                className={`w-full rounded-xl px-4 py-3 mb-4 focus:ring-2 transition ${
-                  isLight ? 'bg-white border border-slate-300 focus:ring-sky-400 focus:border-sky-400 text-slate-900 placeholder-slate-500' : 'bg-slate-700/50 border border-slate-600/50 focus:ring-sky-400 focus:border-sky-400 text-white placeholder-slate-400'
-                }`}
-                value={eventCode}
-                onChange={(e) => setEventCode(e.target.value)}
-                disabled={entering}
-                maxLength={8}
-              />
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  className={`px-4 py-2 rounded-lg border ${isLight ? 'border-slate-300 text-slate-700 hover:bg-slate-50' : 'border-slate-600 text-slate-200 hover:bg-slate-700/50'}`}
-                  onClick={() => setShowEnterCode(false)}
-                  disabled={entering}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 ${isLight ? 'bg-sky-600 hover:bg-sky-700 text-white' : 'bg-sky-500 hover:bg-sky-400 text-slate-900'}`}
-                  disabled={entering}
-                >
-                  {entering && (
-                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                  )}
-                  Enter
-                </button>
-              </div>
-            </form>
+                Dashboard
+              </h1>
+              <p className={`text-sm ${
+                isLight ? 'text-slate-600' : 'text-slate-400'
+              }`}>
+                Welcome back, {currentUser.username || currentUser.email?.split('@')[0] || currentUser.email}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`px-3 py-1 rounded-md text-xs font-medium ${
+                isOrganizer
+                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                  : 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
+              }`}>
+                {isOrganizer ? 'Organizer' : 'Participant'}
+              </span>
+            </div>
           </div>
         </div>
-      )}
 
-      {/* Create Event Modal */}
-      {showCreateEvent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          {/* Backdrop */}
-          <div
-            className={`absolute inset-0 ${isLight ? 'bg-black/30' : 'bg-black/60'}`}
-            onClick={() => !creating && setShowCreateEvent(false)}
-          />
-          {/* Dialog */}
-          <div className={`relative z-10 w-full max-w-md mx-auto rounded-2xl border p-6 shadow-2xl ${
-            isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-slate-800 border-slate-700 text-white'
-          }`}>
-            <h3 className="text-xl font-semibold mb-2">Create Event</h3>
-            <p className={`${isLight ? 'text-slate-600' : 'text-slate-400'} text-sm mb-4`}>
-              Enter details for your new event. Passcode is required (4-10 uppercase letters or digits).
-            </p>
-            {createError && (
-              <div className={`mb-3 text-sm rounded-md px-3 py-2 border ${
-                isLight ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-              }`}>
-                {createError}
-              </div>
-            )}
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                setCreateError('');
-                const name = newEventName.trim();
-                if (!name) {
-                  setCreateError('Please enter an event name.');
-                  return;
-                }
-                try {
-                  setCreating(true);
-                  let pass = newEventPasscode.trim().toUpperCase();
-                  if (!pass) {
-                    setCreateError('Passcode is required.');
-                    setCreating(false);
-                    return;
-                  }
-                  if (!validatePasscode(pass)) {
-                    setCreateError('Passcode must be 4-10 uppercase letters or digits.');
-                    setCreating(false);
-                    return;
-                  }
-                  
-                  // Check if passcode already exists
-                  const isAvailable = await checkPasscodeAvailability(pass, db);
-                  if (!isAvailable) {
-                    setCreateError('This passcode is already in use. Please choose a different one.');
-                    setCreating(false);
-                    return;
-                  }
-
-                  const payload = {
-                    eventName: name,
-                    eventDate: newEventDate || null,
-                    location: newEventLocation.trim() || null,
-                    passcode: pass,
-                    organizerId: currentUser?.uid || null,
-                    createdAt: serverTimestamp(),
-                  };
-                  const ref = await addDoc(collection(db, 'events'), payload);
-                  // Close modal after creation
-                  setShowCreateEvent(false);
-                  setCreating(false);
-                  setNewEventName('');
-                  setNewEventDate('');
-                  setNewEventLocation('');
-                  setNewEventPasscode('');
-                  // Optional: navigate to photos page for the new event
-                  // navigate(`/photos/${pass}`);
-                } catch (err) {
-                  console.error(err);
-                  setCreateError('Failed to create event. Please try again.');
-                  setCreating(false);
-                }
-              }}
+        {/* Messages */}
+        <AnimatePresence>
+          {error && (
+            <Motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="rounded-md border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/20 px-4 py-3 flex items-center gap-3"
             >
-              <input
-                type="text"
-                placeholder="Event name"
-                className={`w-full rounded-xl px-4 py-3 mb-3 focus:ring-2 transition ${
-                  isLight ? 'bg-white border border-slate-300 focus:ring-purple-400 focus:border-purple-400 text-slate-900 placeholder-slate-500' : 'bg-slate-700/50 border border-slate-600/50 focus:ring-purple-400 focus:border-purple-400 text-white placeholder-slate-400'
-                }`}
-                value={newEventName}
-                onChange={(e) => setNewEventName(e.target.value)}
-                disabled={creating}
-                maxLength={120}
-              />
-              <input
-                type="date"
-                className={`w-full rounded-xl px-4 py-3 mb-4 focus:ring-2 transition ${
-                  isLight ? 'bg-white border border-slate-300 focus:ring-purple-400 focus:border-purple-400 text-slate-900 placeholder-slate-500' : 'bg-slate-700/50 border border-slate-600/50 focus:ring-purple-400 focus:border-purple-400 text-white placeholder-slate-400'
-                }`}
-                value={newEventDate}
-                onChange={(e) => setNewEventDate(e.target.value)}
-                disabled={creating}
-              />
-              <input
-                type="text"
-                placeholder="Location (optional)"
-                className={`w-full rounded-xl px-4 py-3 mb-3 focus:ring-2 transition ${
-                  isLight ? 'bg-white border border-slate-300 focus:ring-purple-400 focus:border-purple-400 text-slate-900 placeholder-slate-500' : 'bg-slate-700/50 border border-slate-600/50 focus:ring-purple-400 focus:border-purple-400 text-white placeholder-slate-400'
-                }`}
-                value={newEventLocation}
-                onChange={(e) => setNewEventLocation(e.target.value)}
-                disabled={creating}
-                maxLength={160}
-              />
-              <div className="mb-4">
-                <div className="flex gap-2">
+              <FaTimes className="text-red-500 flex-shrink-0" />
+              <p className="text-red-700 dark:text-red-400 text-sm">{error}</p>
+            </Motion.div>
+          )}
+          {actionMessage && (
+            <Motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="rounded-md border border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20 px-4 py-3 flex items-center gap-3"
+            >
+              <FaCheck className="text-emerald-500 flex-shrink-0" />
+              <p className="text-emerald-700 dark:text-emerald-400 text-sm">{actionMessage}</p>
+            </Motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Loading State */}
+        {loading ? (
+          <div className="space-y-4">
+            <SkeletonCard height="h-32" />
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <SkeletonCard height="h-48" />
+              <SkeletonCard height="h-48" />
+              <SkeletonCard height="h-48" />
+            </div>
+          </div>
+        ) : isOrganizer ? (
+          <>
+            {/* Rooms List */}
+            <section className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className={`text-xl font-semibold ${
+                  isLight ? 'text-slate-900' : 'text-white'
+                }`}>
+                  Your Rooms
+                  {myRoomsList.length > 0 && (
+                    <span className={`ml-2 px-2 py-0.5 rounded text-xs font-medium ${
+                      isLight ? 'bg-slate-200 text-slate-700' : 'bg-slate-700 text-slate-300'
+                    }`}>
+                      {myRoomsList.length}
+                    </span>
+                  )}
+                </h2>
+                <button
+                  onClick={() => setShowCreateModal(true)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium transition-colors"
+                >
+                  <FaPlus className="w-3.5 h-3.5" /> Create Room
+                </button>
+              </div>
+              {myRoomsList.length === 0 ? (
+                <EmptyState
+                  icon={FaInbox}
+                  title="No rooms yet"
+                  description="Create your first room to start organizing and matching photos."
+                  actionLabel="Create Your First Room"
+                  onAction={() => setShowCreateModal(true)}
+                />
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {myRoomsList.map((room, index) => (
+                    <RoomCard key={room.id} room={room} isOrganizer index={index} />
+                  ))}
+                </div>
+              )}
+            </section>
+          </>
+        ) : (
+          <>
+            {/* Join Room Section */}
+            <section
+              className={`rounded-lg border p-5 ${
+                isLight 
+                  ? 'bg-white border-slate-200' 
+                  : 'bg-slate-800 border-slate-700'
+              }`}
+            >
+              <h2 className={`text-lg font-semibold mb-4 ${
+                isLight ? 'text-slate-900' : 'text-white'
+              }`}>
+                Join a Room
+              </h2>
+              <form className="flex flex-col sm:flex-row gap-3" onSubmit={handleJoinRoom}>
+                <input
+                  type="text"
+                  placeholder="Enter room code"
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                  disabled={isJoining}
+                  maxLength={6}
+                  className={`flex-1 rounded-md border px-4 py-2.5 text-base font-mono tracking-wider transition-colors ${
+                    isLight
+                      ? 'bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500'
+                      : 'bg-slate-900 border-slate-600 text-white placeholder-slate-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500'
+                  } focus:outline-none disabled:opacity-50 uppercase`}
+                />
+                <button
+                  type="submit"
+                  disabled={isJoining || !joinCode.trim()}
+                  className="px-6 py-2.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isJoining ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Joining...
+                    </>
+                  ) : (
+                    <>
+                      <FaDoorOpen className="w-3.5 h-3.5" /> Join
+                    </>
+                  )}
+                </button>
+              </form>
+            </section>
+
+            {/* Joined Rooms List */}
+            <section className="space-y-4">
+              <h2 className={`text-xl font-semibold ${
+                isLight ? 'text-slate-900' : 'text-white'
+              }`}>
+                Joined Rooms
+                {joinedRoomsList.length > 0 && (
+                  <span className={`ml-2 px-2 py-0.5 rounded text-xs font-medium ${
+                    isLight ? 'bg-slate-200 text-slate-700' : 'bg-slate-700 text-slate-300'
+                  }`}>
+                    {joinedRoomsList.length}
+                  </span>
+                )}
+              </h2>
+              {joinedRoomsList.length === 0 ? (
+                <EmptyState
+                  icon={FaInbox}
+                  title="No rooms joined yet"
+                  description="Enter a room code above to join and start matching photos."
+                />
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {joinedRoomsList.map((room, index) => (
+                    <RoomCard key={room.id} room={room} isOrganizer={false} index={index} />
+                  ))}
+                </div>
+              )}
+            </section>
+          </>
+        )}
+      </div>
+
+      {/* Create Room Modal */}
+      <AnimatePresence>
+        {showCreateModal && (
+          <Motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+            onClick={() => !isCreating && setShowCreateModal(false)}
+          >
+            <Motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
+              className={`w-full max-w-lg rounded-lg border shadow-lg ${
+                isLight
+                  ? 'bg-white border-slate-200'
+                  : 'bg-slate-800 border-slate-700'
+              }`}
+            >
+              {/* Modal Header */}
+              <div className={`flex items-center justify-between p-5 border-b ${
+                isLight ? 'border-slate-200' : 'border-slate-700'
+              }`}>
+                <h2 className={`text-xl font-semibold ${
+                  isLight ? 'text-slate-900' : 'text-white'
+                }`}>
+                  Create New Room
+                </h2>
+                <button
+                  onClick={() => !isCreating && setShowCreateModal(false)}
+                  disabled={isCreating}
+                  className={`p-1.5 rounded-md transition-colors ${
+                    isLight
+                      ? 'hover:bg-slate-100 text-slate-600'
+                      : 'hover:bg-slate-700 text-slate-400'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  <FaTimes className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <form onSubmit={handleCreateRoom} className="p-5 space-y-4">
+                {/* Room Name */}
+                <div>
+                  <label className={`block text-sm font-medium mb-1.5 ${
+                    isLight ? 'text-slate-700' : 'text-slate-300'
+                  }`}>
+                    Room Name <span className="text-red-500">*</span>
+                  </label>
                   <input
                     type="text"
-                    placeholder="Passcode (required, 4-10 A-Z/0-9)"
-                    className={`flex-1 rounded-xl px-4 py-3 focus:ring-2 transition ${
-                      isLight ? 'bg-white border border-slate-300 focus:ring-purple-400 focus:border-purple-400 text-slate-900 placeholder-slate-500' : 'bg-slate-700/50 border border-slate-600/50 focus:ring-purple-400 focus:border-purple-400 text-white placeholder-slate-400'
-                    }`}
-                    value={newEventPasscode}
-                    onChange={(e) => setNewEventPasscode(e.target.value.toUpperCase())}
-                    disabled={creating}
-                    maxLength={10}
-                    required
+                    placeholder="e.g., Company Event 2024"
+                    value={roomName}
+                    onChange={(e) => setRoomName(e.target.value)}
+                    disabled={isCreating}
+                    maxLength={100}
+                    className={`w-full rounded-md border px-3 py-2.5 text-sm transition-colors ${
+                      isLight
+                        ? 'bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:border-sky-500 focus:ring-1 focus:ring-sky-500'
+                        : 'bg-slate-900 border-slate-600 text-white placeholder-slate-500 focus:border-sky-500 focus:ring-1 focus:ring-sky-500'
+                    } focus:outline-none disabled:opacity-50`}
+                    autoFocus
                   />
+                  <div className={`flex justify-between items-center mt-1 text-xs ${
+                    isLight ? 'text-slate-500' : 'text-slate-400'
+                  }`}>
+                    <span>Choose a descriptive name</span>
+                    <span>{roomName.length}/100</span>
+                  </div>
+                </div>
+
+                {/* Room Description */}
+                <div>
+                  <label className={`block text-sm font-medium mb-1.5 ${
+                    isLight ? 'text-slate-700' : 'text-slate-300'
+                  }`}>
+                    Description <span className="text-xs text-slate-400">(Optional)</span>
+                  </label>
+                  <textarea
+                    placeholder="Add details about this room..."
+                    value={roomDescription}
+                    onChange={(e) => setRoomDescription(e.target.value)}
+                    disabled={isCreating}
+                    maxLength={500}
+                    rows={3}
+                    className={`w-full rounded-md border px-3 py-2.5 text-sm resize-none transition-colors ${
+                      isLight
+                        ? 'bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:border-sky-500 focus:ring-1 focus:ring-sky-500'
+                        : 'bg-slate-900 border-slate-600 text-white placeholder-slate-500 focus:border-sky-500 focus:ring-1 focus:ring-sky-500'
+                    } focus:outline-none disabled:opacity-50`}
+                  />
+                  <div className={`flex justify-between items-center mt-1 text-xs ${
+                    isLight ? 'text-slate-500' : 'text-slate-400'
+                  }`}>
+                    <span>Provide context about this room</span>
+                    <span>{roomDescription.length}/500</span>
+                  </div>
+                </div>
+
+                {/* Error Message */}
+                {error && (
+                  <Motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="rounded-md border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/20 px-3 py-2 flex items-center gap-2"
+                  >
+                    <FaTimes className="text-red-500 flex-shrink-0 w-3.5 h-3.5" />
+                    <p className="text-red-700 dark:text-red-400 text-xs">{error}</p>
+                  </Motion.div>
+                )}
+
+                {/* Modal Footer */}
+                <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-700">
                   <button
                     type="button"
-                    onClick={() => setNewEventPasscode(generateUniquePasscode())}
-                    disabled={creating}
-                    className={`px-4 py-3 rounded-xl font-medium transition ${
-                      isLight 
-                        ? 'bg-purple-100 text-purple-700 hover:bg-purple-200 border border-purple-300' 
-                        : 'bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border border-purple-500/30'
+                    onClick={() => {
+                      setShowCreateModal(false);
+                      setRoomName('');
+                      setRoomDescription('');
+                      setError('');
+                    }}
+                    disabled={isCreating}
+                    className={`px-4 py-2 rounded-md border font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                      isLight
+                        ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                        : 'bg-slate-700 border-slate-600 text-slate-200 hover:bg-slate-600'
                     }`}
                   >
-                    Generate
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isCreating || !roomName.trim() || roomName.trim().length < 3}
+                    className="px-5 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isCreating ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <FaPlus className="w-3.5 h-3.5" /> Create Room
+                      </>
+                    )}
                   </button>
                 </div>
-                <p className={`mt-1 text-xs ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
-                  Use only A-Z and 0-9, length 4 to 10. Click Generate for a random code.
-                </p>
-              </div>
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  className={`px-4 py-2 rounded-lg border ${isLight ? 'border-slate-300 text-slate-700 hover:bg-slate-50' : 'border-slate-600 text-slate-200 hover:bg-slate-700/50'}`}
-                  onClick={() => setShowCreateEvent(false)}
-                  disabled={creating}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 ${isLight ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'bg-purple-600 hover:bg-purple-700 text-white'}`}
-                  disabled={creating}
-                >
-                  {creating && (
-                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                  )}
-                  Create
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              </form>
+            </Motion.div>
+          </Motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
-
-// Recent Events list component
-const RecentEvents = ({ mode = 'organizer' }) => {
-  const { currentUser } = useContext(AuthContext);
-  const navigate = useNavigate();
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
-  const { isLight } = useTheme();
-  const [busyId, setBusyId] = useState(null);
-
-  useEffect(() => {
-    if (!currentUser) return;
-    setLoading(true);
-    setErr(null);
-    if (mode === 'organizer') {
-      const qOrg = query(
-        collection(db, 'events'),
-        where('organizerId', '==', currentUser.uid),
-        limit(20)
-      );
-      const unsub = onSnapshot(
-        qOrg,
-        (snap) => {
-          const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-          rows.sort((a, b) => {
-            const ta = a.createdAt?.seconds || 0;
-            const tb = b.createdAt?.seconds || 0;
-            return tb - ta;
-          });
-          setEvents(rows);
-          setLoading(false);
-        },
-        (error) => {
-          console.error('RecentEvents error:', error);
-          setErr('Failed to load events');
-          setLoading(false);
-        }
-      );
-      return () => unsub();
-    } else {
-      // attendee view: load joined events mapping and then fetch event docs
-      const qJoins = query(
-        collection(db, 'userJoinedEvents'),
-        where('userId', '==', currentUser.uid),
-        limit(20)
-      );
-      const unsub = onSnapshot(
-        qJoins,
-        async (snap) => {
-          try {
-            const joins = snap.docs.map((d) => d.data());
-            const ids = Array.from(new Set(joins.map(j => j.eventId))).filter(Boolean);
-            if (ids.length === 0) {
-              setEvents([]);
-              setLoading(false);
-              return;
-            }
-            const docs = await Promise.all(ids.map(id => getDoc(doc(db, 'events', id))));
-            const rows = docs
-              .filter(d => d.exists())
-              .map(d => ({ id: d.id, ...d.data() }));
-            rows.sort((a, b) => {
-              const ta = a.createdAt?.seconds || 0;
-              const tb = b.createdAt?.seconds || 0;
-              return tb - ta;
-            });
-            setEvents(rows);
-            setLoading(false);
-          } catch (e) {
-            console.error('RecentEvents attendee error:', e);
-            setErr('Failed to load joined events');
-            setLoading(false);
-          }
-        },
-        (error) => {
-          console.error('RecentEvents attendee error:', error);
-          setErr('Failed to load joined events');
-          setLoading(false);
-        }
-      );
-      return () => unsub();
-    }
-  }, [currentUser, mode]);
-
-  return (
-    <div className={`rounded-xl p-6 border ${isLight ? 'bg-white border-slate-200' : 'bg-slate-800 border-slate-700'}`}>
-      <h2 className={`text-xl font-semibold mb-4 ${isLight ? 'text-slate-900' : 'text-white'}`}>{mode === 'organizer' ? 'Recent Events' : 'Joined Events'}</h2>
-      {loading ? (
-        <div className={`${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Loading...</div>
-      ) : err ? (
-        <div className={`${isLight ? 'text-rose-600' : 'text-rose-300'}`}>{err}</div>
-      ) : events.length === 0 ? (
-        <div className={`${isLight ? 'text-slate-600' : 'text-slate-400'}`}>No events yet. Create your first event to get started!</div>
-      ) : (
-        <div className="space-y-3">
-          {events.map((ev) => (
-            <div key={ev.id} className={`flex items-center justify-between rounded-lg p-4 border ${isLight ? 'bg-white border-slate-200' : 'bg-slate-900/40 border-slate-700'}`}>
-              <div>
-                <div className={`${isLight ? 'text-slate-900' : 'text-white'} font-medium`}>{ev.eventName || 'Untitled Event'}</div>
-                <div className={`${isLight ? 'text-slate-600' : 'text-slate-400'} text-sm`}>
-                  {ev.eventDate ? new Date(ev.eventDate).toLocaleDateString() : 'No date'} • Passcode:
-                  <span className={`ml-1 font-mono tracking-widest ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>{ev.passcode}</span>
-                </div>
-              </div>
-              <div className="flex gap-2 flex-wrap">
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => {
-                    sessionStorage.setItem('currentEventPasscode', ev.passcode);
-                    navigate('/photos');
-                  }}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${isLight ? 'bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200' : 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30'}`}
-                >
-                  <FaEye className="h-3 w-3" />
-                  View
-                </motion.button>
-                {mode === 'organizer' && (
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => navigate('/upload', { state: { passcode: ev.passcode, eventId: ev.id } })}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${isLight ? 'bg-green-50 hover:bg-green-100 text-green-700 border border-green-200' : 'bg-green-500/20 hover:bg-green-500/30 text-green-300 border border-green-500/30'}`}
-                  >
-                    <FaUpload className="h-3 w-3" />
-                    Upload
-                  </motion.button>
-                )}
-                {mode === 'organizer' && (
-                  <>
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      disabled={busyId === ev.id}
-                      onClick={async () => {
-                        if (!window.confirm('Delete ALL photos for this event? This cannot be undone.')) return;
-                        try {
-                          setBusyId(ev.id);
-                          // Delete photos by event_id (preferred) or fallback to passcode
-                          let photosQ = query(collection(db, 'photos'), where('event_id', '==', ev.id));
-                          let snap = await getDocs(photosQ);
-                          
-                          // If no photos found by event_id, try by passcode for backward compatibility
-                          if (snap.empty) {
-                            photosQ = query(collection(db, 'photos'), where('project_passcode', '==', ev.passcode));
-                            snap = await getDocs(photosQ);
-                          }
-                          
-                          while (!snap.empty) {
-                            const batch = writeBatch(db);
-                            snap.docs.forEach(d => batch.delete(d.ref));
-                            await batch.commit();
-                            snap = await getDocs(photosQ);
-                          }
-                          alert('Photos deleted for this event.');
-                        } catch (e) {
-                          console.error(e);
-                          alert('Failed to delete photos.');
-                        } finally {
-                          setBusyId(null);
-                        }
-                      }}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed ${isLight ? 'bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200' : 'bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 border border-orange-500/30'}`}
-                    >
-                      <FaTrash className="h-3 w-3" />
-                      {busyId === ev.id ? 'Deleting...' : 'Delete Photos'}
-                    </motion.button>
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      disabled={busyId === ev.id}
-                      onClick={async () => {
-                        if (!window.confirm('Delete this event and all related data (photos, joins, Cloudinary images, and face recognition data)? This cannot be undone.')) return;
-                        
-                        try {
-                          setBusyId(ev.id);
-                          console.log('🗑️ Starting comprehensive event deletion for:', ev.id);
-                          
-                          // Use the comprehensive deletion service
-                          const eventDeletionService = createEventDeletionService(db);
-                          const results = await eventDeletionService.deleteEvent(ev.id, ev.passcode);
-                          
-                          if (results.success) {
-                            const summary = [
-                              `✅ Events: ${results.deleted.events}`,
-                              `✅ Photos: ${results.deleted.photos}`,
-                              `✅ User joins: ${results.deleted.joins}`,
-                              `✅ Cloudinary images: ${results.deleted.cloudinaryImages}`,
-                              `✅ FAISS index: ${results.deleted.faissIndex ? 'Cleared' : 'N/A'}`,
-                              `✅ Face cache: ${results.deleted.faceCache ? 'Cleared' : 'N/A'}`
-                            ].join('\n');
-                            
-                            alert(`Event deleted successfully!\n\n${summary}`);
-                          } else {
-                            const errorSummary = results.errors.length > 0 
-                              ? `\n\nErrors encountered:\n${results.errors.join('\n')}`
-                              : '';
-                            alert(`Event deletion completed with some issues.${errorSummary}`);
-                          }
-                        } catch (e) {
-                          console.error('Delete event error:', e);
-                          alert(`Failed to delete event: ${e.message || 'Unknown error'}`);
-                        } finally {
-                          setBusyId(null);
-                        }
-                      }}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-red-600 hover:bg-red-700 text-white border border-red-600`}
-                    >
-                      <FaTrashAlt className="h-3 w-3" />
-                      {busyId === ev.id ? 'Deleting...' : 'Delete Event'}
-                    </motion.button>
-                  </>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default Dashboard;

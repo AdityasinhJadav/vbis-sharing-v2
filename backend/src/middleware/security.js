@@ -34,7 +34,7 @@ const generalLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // limit each IP to 5 auth requests per windowMs
+  max: 30, // limit each IP to 30 auth requests per windowMs
   message: {
     error: 'Too many authentication attempts, please try again later.',
     retryAfter: '15 minutes'
@@ -43,9 +43,21 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// More lenient rate limiter for signup (allows more attempts for legitimate users)
+const signupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 50, // limit each IP to 50 signup requests per windowMs
+  message: {
+    error: 'Too many sign up attempts, please try again after some time.',
+    retryAfter: '15 minutes'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 const uploadLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 10, // limit each IP to 10 uploads per minute
+  max: 50, // limit each IP to 50 uploads per minute (increased for batch uploads)
   message: {
     error: 'Too many uploads, please slow down.',
     retryAfter: '1 minute'
@@ -127,10 +139,20 @@ const validateFileUpload = (req, res, next) => {
 const validateEnvironment = () => {
   const requiredVars = [
     'JWT_SECRET',
+    'MONGODB_URI',
     'CLOUDINARY_CLOUD_NAME',
     'CLOUDINARY_API_KEY',
     'CLOUDINARY_API_SECRET'
   ];
+
+  const optionalVars = {
+    'FRONTEND_URL': 'http://localhost:5173',
+    'FLASK_SERVICE_URL': 'http://localhost:5000',
+    'FLASK_SERVICE_SECRET': null, // Will warn if not set
+    'UPLOAD_DIR': 'uploads',
+    'DATA_DIR': 'data',
+    'PORT': '4000'
+  };
 
   const missing = requiredVars.filter(varName => !process.env[varName]);
   
@@ -138,6 +160,16 @@ const validateEnvironment = () => {
     logger.error('Missing required environment variables', { missing });
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
+
+  // Set defaults for optional variables
+  Object.entries(optionalVars).forEach(([key, defaultValue]) => {
+    if (!process.env[key] && defaultValue !== null) {
+      process.env[key] = defaultValue;
+      logger.info(`Using default for ${key}: ${defaultValue}`);
+    } else if (!process.env[key] && defaultValue === null) {
+      logger.warn(`${key} is not set. Some features may not work properly.`);
+    }
+  });
 
   // Validate JWT secret strength
   if (process.env.JWT_SECRET === 'change_me' || process.env.JWT_SECRET.length < 32) {
@@ -205,6 +237,7 @@ const roomValidation = [
 module.exports = {
   generalLimiter,
   authLimiter,
+  signupLimiter,
   uploadLimiter,
   securityHeaders,
   validateRequest,

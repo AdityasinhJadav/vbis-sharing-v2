@@ -8,14 +8,6 @@ const config = {
   API_BASE_URL: import.meta.env.VITE_API_BASE || 'http://localhost:4000/api',
   FLASK_API_URL: import.meta.env.VITE_FLASK_API_URL || 'http://localhost:5000/api',
   
-  // Firebase Configuration
-  FIREBASE_API_KEY: import.meta.env.VITE_FIREBASE_API_KEY,
-  FIREBASE_AUTH_DOMAIN: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  FIREBASE_PROJECT_ID: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  FIREBASE_STORAGE_BUCKET: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  FIREBASE_MESSAGING_SENDER_ID: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  FIREBASE_APP_ID: import.meta.env.VITE_FIREBASE_APP_ID,
-  
   // Cloudinary Configuration
   CLOUDINARY_CLOUD_NAME: import.meta.env.VITE_CLOUDINARY_CLOUD_NAME,
   CLOUDINARY_UPLOAD_PRESET: import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET,
@@ -44,12 +36,6 @@ const config = {
 // Validate required environment variables
 const validateConfig = () => {
   const requiredVars = [
-    'FIREBASE_API_KEY',
-    'FIREBASE_AUTH_DOMAIN',
-    'FIREBASE_PROJECT_ID',
-    'FIREBASE_STORAGE_BUCKET',
-    'FIREBASE_MESSAGING_SENDER_ID',
-    'FIREBASE_APP_ID',
     'CLOUDINARY_CLOUD_NAME',
     'CLOUDINARY_UPLOAD_PRESET'
   ];
@@ -57,8 +43,12 @@ const validateConfig = () => {
   const missing = requiredVars.filter(varName => !config[varName]);
   
   if (missing.length > 0) {
-    console.error('Missing required environment variables:', missing);
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+    console.warn('Missing recommended environment variables:', missing);
+    // Don't throw error in development, just warn
+    if (config.NODE_ENV === 'production') {
+      console.error('Missing required environment variables:', missing);
+      throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+    }
   }
 };
 

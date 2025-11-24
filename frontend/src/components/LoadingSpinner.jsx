@@ -1,5 +1,5 @@
 import React from 'react';
-import { motion } from 'framer-motion';
+import { motion as Motion } from 'framer-motion';
 import { FaSpinner, FaCamera, FaUpload, FaSearch } from 'react-icons/fa';
 
 const LoadingSpinner = ({ 
@@ -34,33 +34,33 @@ const LoadingSpinner = ({
   };
 
   return (
-    <motion.div
+    <Motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       className="flex flex-col items-center justify-center p-8"
     >
-      <motion.div
+      <Motion.div
         animate={{ rotate: 360 }}
         transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
         className={`${getSizeClasses()} text-sky-400 mb-4`}
       >
         {getIcon()}
-      </motion.div>
+      </Motion.div>
       
-      <motion.p
+      <Motion.p
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2 }}
         className="text-slate-300 text-center"
       >
         {message}
-      </motion.p>
+      </Motion.p>
 
       {showProgress && (
         <div className="w-48 mt-4">
           <div className="w-full bg-slate-700 rounded-full h-2">
-            <motion.div
+            <Motion.div
               initial={{ width: 0 }}
               animate={{ width: `${progress}%` }}
               transition={{ duration: 0.3 }}
@@ -72,7 +72,7 @@ const LoadingSpinner = ({
           </p>
         </div>
       )}
-    </motion.div>
+    </Motion.div>
   );
 };
 

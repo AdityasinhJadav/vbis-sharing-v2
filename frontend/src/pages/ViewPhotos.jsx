@@ -5,21 +5,18 @@ import { FaArrowLeft, FaDownload, FaTimes, FaEye, FaSpinner, FaCamera, FaUpload,
 import { AuthContext } from '../auth/AuthContext';
 import { useToast } from '../components/ToastProvider';
 import { useTheme } from '../theme/ThemeContext';
-import { db } from '../firebase';
-import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
-import { getThumbnailUrl, getFullSizeUrl } from '../utils/cloudinary';
-import { flaskFaceService } from '../utils/flaskFaceApi';
+import { roomDetails, roomPhotos, match, retryPhotoIngestion, getIngestionStatus } from '../api';
 import CameraCapture from '../components/CameraCapture';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { SkeletonPhotoGrid } from '../components/SkeletonLoader';
-import { cacheUtils, generateCacheKey } from '../utils/cache';
-import { perfMonitor } from '../utils/performance';
+import { compressImage } from '../utils/imageCompression';
 
 // Justified gallery that preserves image aspect ratios.
 // Wider images occupy more horizontal space within a row.
 const JustifiedGallery = ({ photos, onSelect, onToggleSelect, selectedPhotos, isSelectionMode, targetRowHeight = 260, rowGap = 16, itemGap = 16 }) => {
   const containerRef = useRef(null);
   const [containerWidth, setContainerWidth] = useState(0);
+  const [imageDimensions, setImageDimensions] = useState(new Map());
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -33,19 +30,47 @@ const JustifiedGallery = ({ photos, onSelect, onToggleSelect, selectedPhotos, is
     return () => observer.disconnect();
   }, []);
 
-  const rows = useMemo(() => {
-    if (!photos || photos.length === 0 || containerWidth === 0) return [];
+  // Load image dimensions
+  useEffect(() => {
+    const loadDimensions = async () => {
+      const newDimensions = new Map();
+      const promises = photos.map(photo => {
+        return new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            newDimensions.set(photo.id, { width: img.width, height: img.height });
+            resolve();
+          };
+          img.onerror = () => {
+            // Default dimensions if image fails to load
+            newDimensions.set(photo.id, { width: 800, height: 600 });
+            resolve();
+          };
+          img.src = photo.url || photo.cloudinaryPublicId || '';
+        });
+      });
+      await Promise.all(promises);
+      setImageDimensions(newDimensions);
+    };
+    if (photos.length > 0) {
+      loadDimensions();
+    }
+  }, [photos]);
 
-    const effectiveWidth = containerWidth; // padding already handled by parent
+  const rows = useMemo(() => {
+    if (!photos || photos.length === 0 || containerWidth === 0 || imageDimensions.size === 0) return [];
+
+    const effectiveWidth = containerWidth;
     const items = photos
-      .filter((p) => p.width && p.height)
-      .map((p) => ({
-        photo: p,
-        aspect: p.width / p.height,
-        // initial width at target row height
-        widthAtTarget: (p.width / p.height) * targetRowHeight,
-        heightAtTarget: targetRowHeight,
-      }));
+      .map((p) => {
+        const dims = imageDimensions.get(p.id) || { width: 800, height: 600 };
+        return {
+          photo: p,
+          aspect: dims.width / dims.height,
+          widthAtTarget: (dims.width / dims.height) * targetRowHeight,
+          heightAtTarget: targetRowHeight,
+        };
+      });
 
     const computedRows = [];
     let currentRow = [];
@@ -57,12 +82,10 @@ const JustifiedGallery = ({ photos, onSelect, onToggleSelect, selectedPhotos, is
       const tentativeWidth = currentRowWidth + item.widthAtTarget + (currentRow.length > 0 ? itemGap : 0);
       currentRow.push(item);
       currentRowWidth = tentativeWidth;
-
       const isLastItem = i === items.length - 1;
-      const minRowFill = effectiveWidth * 0.9; // allow some slack before justifying
+      const minRowFill = effectiveWidth * 0.9;
 
       if (currentRowWidth >= minRowFill || isLastItem) {
-        // Scale row to fit exactly the container width
         const totalWidthAtTarget = currentRow.reduce((sum, it) => sum + it.widthAtTarget, 0);
         const scale = (effectiveWidth - gapTotal(currentRow.length)) / Math.max(totalWidthAtTarget, 1);
         const row = currentRow.map((it) => ({
@@ -76,13 +99,13 @@ const JustifiedGallery = ({ photos, onSelect, onToggleSelect, selectedPhotos, is
       }
     }
     return computedRows;
-  }, [photos, containerWidth, targetRowHeight, itemGap]);
+  }, [photos, containerWidth, targetRowHeight, itemGap, imageDimensions]);
 
   return (
     <div ref={containerRef} style={{ gap: rowGap }} className="flex flex-col">
       {rows.map((row, rIndex) => (
         <div key={rIndex} className="flex" style={{ gap: itemGap }}>
-          {row.map((item, iIndex) => (
+          {row.map((item) => (
             <div
               key={item.photo.id}
               className="group relative overflow-hidden bg-slate-800 border border-slate-700 hover:border-slate-600 transition-all cursor-pointer"
@@ -90,7 +113,7 @@ const JustifiedGallery = ({ photos, onSelect, onToggleSelect, selectedPhotos, is
               onClick={() => isSelectionMode ? onToggleSelect(item.photo) : onSelect(item.photo)}
             >
               <img
-                src={getThumbnailUrl(item.photo.cloudinaryPublicId, Math.min(1600, item.width * 2))}
+                src={item.photo.url || item.photo.cloudinaryPublicId || ''}
                 alt={item.photo.originalName || 'Photo'}
                 className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.02] block"
                 loading="lazy"
@@ -122,107 +145,198 @@ const JustifiedGallery = ({ photos, onSelect, onToggleSelect, selectedPhotos, is
 };
 
 const ViewPhotos = () => {
+  const { roomId } = useParams();
   const navigate = useNavigate();
-  const [passcode, setPasscode] = useState(null);
   const { currentUser } = useContext(AuthContext);
   const toast = useToast();
   const { isLight } = useTheme();
-  
+
   const [photos, setPhotos] = useState([]);
   const [filteredPhotos, setFilteredPhotos] = useState([]);
   const [userMatchedPhotos, setUserMatchedPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
-  const [eventInfo, setEventInfo] = useState(null);
+  const [roomInfo, setRoomInfo] = useState(null);
   const [activeTab, setActiveTab] = useState('all'); // 'all' or 'yours'
   const [showCameraCapture, setShowCameraCapture] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [faceMatching, setFaceMatching] = useState(false);
-  const [userFaceDescriptor, setUserFaceDescriptor] = useState(null);
-  const [modelsLoaded, setModelsLoaded] = useState(false);
   const [selectedPhotos, setSelectedPhotos] = useState([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [ingestionStatus, setIngestionStatus] = useState(null);
+  const [retryingIngestion, setRetryingIngestion] = useState(false);
 
-  // Get passcode from session storage
+  // Fetch room info and photos
   useEffect(() => {
-    const storedPasscode = sessionStorage.getItem('currentEventPasscode');
-    if (!storedPasscode) {
-      // No passcode found, redirect to dashboard
-      navigate('/dashboard');
-      return;
-    }
-    setPasscode(storedPasscode);
+    if (!roomId || !currentUser) return;
 
-    // Cleanup function to clear passcode when component unmounts
-    return () => {
-      // Only clear if we're navigating away (not just refreshing)
-      const currentPath = window.location.pathname;
-      if (currentPath !== '/photos') {
-        sessionStorage.removeItem('currentEventPasscode');
-      }
-    };
-  }, [navigate]);
-
-  // Initialize Flask face recognition service
-  useEffect(() => {
-    const initializeFaceRecognition = async () => {
+    const loadData = async () => {
       try {
-        console.log('🚀 Initializing Flask face recognition service...');
-        await flaskFaceService.initialize();
-        console.log('✅ Flask face recognition service initialized successfully');
-        setModelsLoaded(true);
-        // Silent initialization - no toast notifications
-      } catch (error) {
-        console.error('❌ Failed to initialize face recognition:', error);
-        console.log('💡 Make sure Flask backend is running on http://localhost:5000');
-        // Silent error handling - no toast notifications
+        setLoading(true);
+        setError(null);
+
+        // Fetch room details
+        const room = await roomDetails(roomId);
+        setRoomInfo(room);
+
+        // Fetch photos
+        const photosList = await roomPhotos(roomId);
+        // Sort by uploadedAt if available, otherwise by id
+        photosList.sort((a, b) => {
+          const aTime = a.uploadedAt ? new Date(a.uploadedAt).getTime() : 0;
+          const bTime = b.uploadedAt ? new Date(b.uploadedAt).getTime() : 0;
+          return bTime - aTime; // Descending order (newest first)
+        });
+        setPhotos(photosList);
+        setFilteredPhotos(photosList);
+      } catch (err) {
+        console.error('Error loading room data:', err);
+        setError(err.message || 'Failed to load room. Please check your permissions.');
+      } finally {
+        setLoading(false);
       }
     };
-    initializeFaceRecognition();
-  }, []);
 
-  // Handle face matching using Flask backend
+    loadData();
+  }, [roomId, currentUser]);
+
+  // Filter photos based on active tab
+  useEffect(() => {
+    const currentPhotos = activeTab === 'yours' ? userMatchedPhotos : photos;
+    setFilteredPhotos(currentPhotos);
+  }, [photos, userMatchedPhotos, activeTab]);
+
+  // Load ingestion status (for organizers)
+  useEffect(() => {
+    if (!roomId || !currentUser || currentUser.role !== 'organizer') return;
+    
+    const loadIngestionStatus = async () => {
+      try {
+        const status = await getIngestionStatus(roomId);
+        setIngestionStatus(status);
+      } catch (err) {
+        console.error('Failed to load ingestion status:', err);
+      }
+    };
+    
+    loadIngestionStatus();
+    // Refresh status every 30 seconds
+    const interval = setInterval(loadIngestionStatus, 30000);
+    return () => clearInterval(interval);
+  }, [roomId, currentUser]);
+
+  // Handle retry ingestion
+  const handleRetryIngestion = async () => {
+    if (!roomId) return;
+    
+    setRetryingIngestion(true);
+    try {
+      const result = await retryPhotoIngestion(roomId);
+      toast.success(result.message || 'Photo processing started in background');
+      
+      // Refresh status after a delay
+      setTimeout(async () => {
+        try {
+          const status = await getIngestionStatus(roomId);
+          setIngestionStatus(status);
+        } catch (err) {
+          console.error('Failed to refresh ingestion status:', err);
+        }
+      }, 2000);
+    } catch (err) {
+      toast.error(err.message || 'Failed to retry photo ingestion');
+    } finally {
+      setRetryingIngestion(false);
+    }
+  };
+
+  // Handle face matching using existing API
   const handleFaceMatching = async (imageFile) => {
-    if (!modelsLoaded) {
-      toast.error('Face recognition service not ready');
+    if (!roomId) {
+      toast.error('Room not found');
       return;
     }
 
     setFaceMatching(true);
     try {
+      // Compress image if it's too large
+      let processedFile = imageFile;
+      if (imageFile.size > 10 * 1024 * 1024) {
+        toast.info('Compressing image for upload...', { duration: 2000 });
+        processedFile = await compressImage(imageFile, {
+          maxSizeMB: 9,
+          maxWidth: 1920,
+          maxHeight: 1920,
+          quality: 0.85
+        });
+      }
+      
       console.log('Starting face matching with', photos.length, 'photos');
-      console.log('Sample photo object:', photos[0]);
       
-      const descriptor = await flaskFaceService.getFaceDescriptor(imageFile);
-      console.log('Got user face descriptor:', descriptor ? 'SUCCESS' : 'FAILED');
-      setUserFaceDescriptor(descriptor);
+      const result = await match(roomId, processedFile);
+      const matches = result.matches || [];
       
-      const matchedPhotos = await flaskFaceService.findMatchingPhotos(descriptor, photos, 0.5, imageFile);
-      console.log('Face matching results:', matchedPhotos.length, 'matches out of', photos.length, 'photos');
-      console.log('Matched photos:', matchedPhotos);
+      console.log('Face matching results:', {
+        matchesCount: matches.length,
+        totalPhotos: photos.length,
+        threshold: result.threshold,
+        message: result.message,
+        rawMatches: matches
+      });
       
+      // Show helpful message if no matches but photos exist
+      if (matches.length === 0 && photos.length > 0 && result.message) {
+        toast.info(result.message);
+      }
+      
+      // Map matches to photo objects
+      const photoMap = new Map(photos.map(p => [p.id, p]));
+      const matchedPhotos = matches
+        .map(match => {
+          const photo = photoMap.get(match.id || match.photo?.id);
+          if (!photo) return null;
+          // Use confidence if available (new improved algorithm), otherwise use score
+          const confidence = match.confidence !== undefined ? match.confidence : match.score;
+          return {
+            ...photo,
+            matchScore: match.score || match.similarity || 0,
+            confidence: confidence || match.score || 0,
+          };
+        })
+        .filter(photo => photo !== null)
+        .sort((a, b) => {
+          // Sort by confidence first (if available), then by score
+          if (a.confidence !== undefined && b.confidence !== undefined) {
+            return b.confidence - a.confidence;
+          }
+          return b.matchScore - a.matchScore;
+        });
+
       setUserMatchedPhotos(matchedPhotos);
       setActiveTab('yours');
-      
+
       if (matchedPhotos.length > 0) {
-        const avgAccuracy = Math.round((matchedPhotos.reduce((sum, photo) => sum + photo.matchScore, 0) / matchedPhotos.length) * 100);
-        toast.success(`🎉 Found ${matchedPhotos.length} photos with your face! (Avg. accuracy: ${avgAccuracy}%)`);
+        // Calculate average accuracy using confidence if available, otherwise use matchScore
+        const avgAccuracy = Math.round(
+          (matchedPhotos.reduce((sum, photo) => {
+            const score = photo.confidence !== undefined ? photo.confidence : photo.matchScore;
+            return sum + score;
+          }, 0) / matchedPhotos.length) * 100
+        );
+        toast.success(`🎉 Found ${matchedPhotos.length} photos with your face! (Avg. confidence: ${avgAccuracy}%)`);
       } else {
         toast.warning('😔 No matching faces found. Try a clearer photo with good lighting.');
       }
     } catch (error) {
       console.error('Face matching error:', error);
       
-      // Provide specific error messages based on the error type
       let errorMessage = 'Face matching failed - please try a different photo';
       
       if (error.message && error.message.includes('No faces detected')) {
         errorMessage = 'No face detected in your photo. Please try:\n• A clearer, front-facing photo\n• Better lighting\n• A different angle';
       } else if (error.message && error.message.includes('Invalid image format')) {
         errorMessage = 'Invalid image format. Please upload a JPG or PNG file.';
-      } else if (error.message && error.message.includes('Backend service not available')) {
-        errorMessage = 'Face recognition service is not available. Please try again later.';
       } else if (error.message) {
         errorMessage = error.message;
       }
@@ -248,102 +362,17 @@ const ViewPhotos = () => {
     }
   };
 
-  // Fetch event info first
-  useEffect(() => {
-    if (!passcode || !currentUser) return;
-
-    setLoading(true);
-    setError(null);
-
-    // First get event info
-    const eventQuery = query(
-      collection(db, 'events'),
-      where('passcode', '==', passcode.toUpperCase())
-    );
-
-    const unsubEvent = onSnapshot(
-      eventQuery,
-      (snapshot) => {
-        if (!snapshot.empty) {
-          const eventData = snapshot.docs[0].data();
-          const eventId = snapshot.docs[0].id;
-          setEventInfo({ id: eventId, ...eventData });
-        } else {
-          setError('Event not found. Please check the passcode.');
-          setLoading(false);
-        }
-      },
-      (err) => {
-        console.error('Event fetch error:', err);
-        setError('Failed to load event. Please try again.');
-        setLoading(false);
-      }
-    );
-
-    return () => {
-      unsubEvent();
-    };
-  }, [passcode, currentUser]);
-
-  // Fetch photos after event info is available
-  useEffect(() => {
-    if (!eventInfo?.id || !currentUser) return;
-
-    // Get photos using event_id for better uniqueness
-    const photosQuery = query(
-      collection(db, 'photos'),
-      where('event_id', '==', eventInfo.id)
-    );
-
-    const unsubPhotos = onSnapshot(
-      photosQuery,
-      (snapshot) => {
-        const photosList = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        
-        // Sort photos by uploadedAt in JavaScript (since we can't use orderBy without index)
-        photosList.sort((a, b) => {
-          const aTime = a.uploadedAt?.seconds || 0;
-          const bTime = b.uploadedAt?.seconds || 0;
-          return bTime - aTime; // Descending order (newest first)
-        });
-        
-        setPhotos(photosList);
-        setFilteredPhotos(photosList);
-        setLoading(false);
-      },
-      (err) => {
-        console.error('Photos fetch error:', err);
-        setError('Failed to load photos. Please check your permissions.');
-        setLoading(false);
-      }
-    );
-
-    return () => {
-      unsubPhotos();
-    };
-  }, [eventInfo?.id, currentUser]);
-
-  // Filter photos based on active tab
-  useEffect(() => {
-    const currentPhotos = activeTab === 'yours' ? userMatchedPhotos : photos;
-    setFilteredPhotos(currentPhotos);
-  }, [photos, userMatchedPhotos, activeTab]);
-
   const downloadPhoto = async (photo) => {
     try {
-      const imageUrl = getFullSizeUrl(photo.cloudinaryPublicId);
+      const imageUrl = photo.url || photo.cloudinaryPublicId || '';
       const fileName = photo.originalName || `photo-${photo.id}.jpg`;
-      
+
       console.log('Downloading photo:', {
         photoId: photo.id,
         fileName,
         imageUrl,
-        cloudinaryPublicId: photo.cloudinaryPublicId
       });
-      
+
       try {
         // Method 1: Fetch as blob (handles CORS properly)
         console.log('Attempting blob download...');
@@ -351,12 +380,11 @@ const ViewPhotos = () => {
         if (!response.ok) {
           throw new Error(`Failed to fetch image: ${response.statusText}`);
         }
-        
+
         const blob = await response.blob();
         console.log('Blob created, size:', blob.size);
-        
+
         const url = window.URL.createObjectURL(blob);
-        
         const link = document.createElement('a');
         link.href = url;
         link.download = fileName;
@@ -364,10 +392,8 @@ const ViewPhotos = () => {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        
-        // Clean up the object URL
         window.URL.revokeObjectURL(url);
-        
+
         console.log('Blob download successful');
         toast.success('Download started!');
       } catch (blobError) {
@@ -383,7 +409,7 @@ const ViewPhotos = () => {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        
+
         console.log('Direct download attempted');
         toast.success('Download started!');
       }
@@ -416,28 +442,27 @@ const ViewPhotos = () => {
       toast.warning('No photos selected');
       return;
     }
-
     try {
       const selectedPhotoObjects = filteredPhotos.filter(photo => selectedPhotos.includes(photo.id));
       let successCount = 0;
       let errorCount = 0;
-      
+
       for (let i = 0; i < selectedPhotoObjects.length; i++) {
         const photo = selectedPhotoObjects[i];
-        
+
         try {
-          const imageUrl = getFullSizeUrl(photo.cloudinaryPublicId);
+          const imageUrl = photo.url || photo.cloudinaryPublicId || '';
           const fileName = photo.originalName || `photo-${photo.id}.jpg`;
-          
+
           // Fetch the image as a blob to handle CORS properly
           const response = await fetch(imageUrl);
           if (!response.ok) {
             throw new Error(`Failed to fetch image: ${response.statusText}`);
           }
-          
+
           const blob = await response.blob();
           const url = window.URL.createObjectURL(blob);
-          
+
           const link = document.createElement('a');
           link.href = url;
           link.download = fileName;
@@ -445,29 +470,27 @@ const ViewPhotos = () => {
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
-          
-          // Clean up the object URL
           window.URL.revokeObjectURL(url);
-          
+
           successCount++;
         } catch (error) {
           console.error(`Failed to download photo ${photo.id}:`, error);
           errorCount++;
         }
-        
+
         // Add delay between downloads to prevent browser blocking
         if (i < selectedPhotoObjects.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
-      
+
       if (successCount > 0) {
         toast.success(`Downloaded ${successCount} photo${successCount !== 1 ? 's' : ''}!`);
       }
       if (errorCount > 0) {
         toast.warning(`Failed to download ${errorCount} photo${errorCount !== 1 ? 's' : ''}`);
       }
-      
+
       clearSelection();
       setIsSelectionMode(false);
     } catch (error) {
@@ -533,19 +556,43 @@ const ViewPhotos = () => {
             </motion.button>
             <div>
               <h1 className="text-3xl font-bold text-white">Event Photos</h1>
-              {eventInfo && (
+              {roomInfo && (
                 <p className="text-slate-400">
-                  {eventInfo.eventName}
+                  {roomInfo.name}
                 </p>
+              )}
+              {/* Ingestion Status (Organizers only) */}
+              {currentUser?.role === 'organizer' && ingestionStatus && (
+                <div className="mt-2 flex items-center gap-3">
+                  <div className={`text-xs px-2 py-1 rounded ${
+                    ingestionStatus.processingProgress === 100
+                      ? 'bg-emerald-900/30 text-emerald-400'
+                      : ingestionStatus.unprocessedPhotos > 0
+                      ? 'bg-yellow-900/30 text-yellow-400'
+                      : 'bg-slate-700 text-slate-400'
+                  }`}>
+                    {ingestionStatus.processedPhotos}/{ingestionStatus.totalPhotos} photos processed
+                    {ingestionStatus.processingProgress < 100 && ` (${ingestionStatus.processingProgress}%)`}
+                  </div>
+                  {ingestionStatus.unprocessedPhotos > 0 && (
+                    <button
+                      onClick={handleRetryIngestion}
+                      disabled={retryingIngestion}
+                      className="text-xs px-2 py-1 rounded bg-sky-600 hover:bg-sky-700 disabled:bg-gray-600 text-white transition-colors"
+                    >
+                      {retryingIngestion ? 'Processing...' : `Process ${ingestionStatus.unprocessedPhotos} unprocessed`}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           </div>
-          
+
           <div className="flex items-center gap-4">
             <div className="text-slate-400">
               {filteredPhotos.length} photo{filteredPhotos.length !== 1 ? 's' : ''}
             </div>
-            
+
             {filteredPhotos.length > 0 && (
               <div className="flex items-center gap-2">
                 {!isSelectionMode ? (
@@ -636,14 +683,12 @@ const ViewPhotos = () => {
               Your Photos ({userMatchedPhotos.length})
             </button>
           </div>
-
         </motion.div>
-
       </div>
 
       {/* Photos Grid - full width */}
       <div className="w-full px-0">
-{faceMatching && activeTab === 'yours' ? (
+        {faceMatching && activeTab === 'yours' ? (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -680,8 +725,7 @@ const ViewPhotos = () => {
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={() => setShowCameraCapture(true)}
-                  disabled={!modelsLoaded}
-                  className="flex items-center gap-2 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white rounded-xl font-medium transition-colors"
+                  className="flex items-center gap-2 px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl font-medium transition-colors"
                 >
                   <FaCamera className="h-5 w-5" />
                   Take Selfie
@@ -690,8 +734,7 @@ const ViewPhotos = () => {
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={() => setShowUploadModal(true)}
-                  disabled={!modelsLoaded}
-                  className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded-xl font-medium transition-colors"
+                  className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors"
                 >
                   <FaUpload className="h-5 w-5" />
                   Upload Photo
@@ -740,7 +783,6 @@ const ViewPhotos = () => {
               >
                 <FaTimes className="h-5 w-5" />
               </button>
-
               {/* Download button */}
               <button
                 onClick={() => downloadPhoto(selectedPhoto)}
@@ -748,14 +790,12 @@ const ViewPhotos = () => {
               >
                 <FaDownload className="h-5 w-5" />
               </button>
-
               {/* Image */}
               <img
-                src={getFullSizeUrl(selectedPhoto.cloudinaryPublicId)}
+                src={selectedPhoto.url || selectedPhoto.cloudinaryPublicId || ''}
                 alt={selectedPhoto.originalName || 'Photo'}
                 className="max-w-full max-h-full object-contain rounded-lg"
               />
-
             </motion.div>
           </motion.div>
         )}
@@ -794,11 +834,11 @@ const ViewPhotos = () => {
                   <FaTimes className="h-5 w-5" />
                 </button>
               </div>
-              
+
               <p className="text-slate-400 mb-4">
                 Upload a clear photo of yourself to find all photos containing your face.
               </p>
-              
+
               <div className="bg-slate-700 rounded-lg p-4 mb-6">
                 <h4 className="text-white font-medium mb-2">📸 Tips for better face detection:</h4>
                 <ul className="text-slate-300 text-sm space-y-1">
@@ -809,7 +849,7 @@ const ViewPhotos = () => {
                   <li>• Use a high-quality photo</li>
                 </ul>
               </div>
-              
+
               <input
                 type="file"
                 accept="image/*"
@@ -823,7 +863,7 @@ const ViewPhotos = () => {
               >
                 <FaUpload className="h-8 w-8 mx-auto mb-4 text-slate-500" />
                 <p className="text-slate-300 font-medium mb-2">Click to upload photo</p>
-                <p className="text-slate-500 text-sm">JPG, PNG, GIF up to 10MB</p>
+                <p className="text-slate-500 text-sm">JPG, PNG, GIF (large files will be compressed automatically)</p>
               </label>
             </motion.div>
           </motion.div>

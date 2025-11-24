@@ -1,0 +1,74 @@
+# Dependencies
+node_modules/
+venv/
+venv*/
+env/
+ENV/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+
+# Uploads and data
+uploads/
+data/
+faiss_indices/
+faiss_store/
+
+# Flask backend virtual environment
+flask-backend/venv*/
+flask-backend/__pycache__/
+flask-backend/*.pyc
+
+# Model files (if large)
+*.pkl
+*.h5
+*.onnx
+*.pb
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Testing
+coverage/
+.nyc_output/
+.pytest_cache/
+
+# Production
+*.pid
+*.seed
+*.pid.lock
+

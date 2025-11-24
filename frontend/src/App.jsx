@@ -6,6 +6,7 @@ import Home from './pages/Home'
 import AuthLogin from './pages/AuthLogin'
 import AuthSignup from './pages/AuthSignup'
 import Dashboard from './pages/Dashboard'
+import SetupUsername from './pages/SetupUsername'
 import UploadPhotos from './pages/UploadPhotos'
 import ViewPhotos from './pages/ViewPhotos'
 
@@ -17,9 +18,11 @@ function App() {
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<AuthLogin />} />
           <Route path="/signup" element={<AuthSignup />} />
+          <Route path="/setup-username" element={<SetupUsername />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/upload" element={<UploadPhotos />} />
-          <Route path="/photos" element={<ViewPhotos />} />
+          <Route path="/upload/:roomId" element={<UploadPhotos />} />
+          <Route path="/photos/:roomId" element={<ViewPhotos />} />
         </Routes>
       </AppLayout>
     </ErrorBoundary>

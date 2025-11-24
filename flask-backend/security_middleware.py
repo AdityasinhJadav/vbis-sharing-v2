@@ -6,11 +6,66 @@ from flask import request, jsonify, g
 from functools import wraps
 import time
 import logging
+import threading
 from collections import defaultdict, deque
 import hashlib
+import os
+def require_service_secret(f):
+    """
+    Ensure requests include the shared service secret.
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Check both environment variable names for compatibility
+        expected = os.getenv('FLASK_SERVICE_SECRET') or os.getenv('SERVICE_SHARED_SECRET')
+        if expected:
+            provided = request.headers.get('X-Service-Secret')
+            if provided != expected:
+                logger.warning(f"Unauthorized service request from {request.remote_addr}")
+                return jsonify({'error': 'Unauthorized service request'}), 401
+        else:
+            # In development, allow requests if secret is not set
+            if os.getenv('FLASK_ENV') != 'production':
+                logger.warning("FLASK_SERVICE_SECRET not set. Allowing request in development mode.")
+            else:
+                logger.error("FLASK_SERVICE_SECRET not set in production. Rejecting request.")
+                return jsonify({'error': 'Service authentication not configured'}), 500
+        return f(*args, **kwargs)
+    return decorated_function
 
-# Rate limiting storage
-rate_limit_storage = defaultdict(lambda: deque(maxlen=100))
+
+# Rate limiting storage with cleanup
+class RateLimitStorage:
+    """Thread-safe rate limiting storage with automatic cleanup"""
+    def __init__(self, max_age=3600):
+        self.storage = defaultdict(lambda: deque(maxlen=100))
+        self.max_age = max_age
+        self.last_cleanup = time.time()
+        self._lock = threading.Lock()
+    
+    def get(self, key):
+        with self._lock:
+            self._cleanup_if_needed()
+            return self.storage[key]
+    
+    def _cleanup_if_needed(self):
+        now = time.time()
+        if now - self.last_cleanup > 300:  # Clean every 5 minutes
+            self._cleanup_old_entries()
+            self.last_cleanup = now
+    
+    def _cleanup_old_entries(self):
+        cutoff = time.time() - self.max_age
+        keys_to_remove = []
+        for key in self.storage.keys():
+            while self.storage[key] and self.storage[key][0] < cutoff:
+                self.storage[key].popleft()
+            if not self.storage[key]:
+                keys_to_remove.append(key)
+        for key in keys_to_remove:
+            del self.storage[key]
+
+rate_limit_storage = RateLimitStorage()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -32,12 +87,15 @@ def rate_limit(max_requests=100, window=60):
             key = f"{client_ip}:{request.endpoint}"
             now = time.time()
             
+            # Get storage for this key
+            storage = rate_limit_storage.get(key)
+            
             # Clean old entries
-            while rate_limit_storage[key] and rate_limit_storage[key][0] <= now - window:
-                rate_limit_storage[key].popleft()
+            while storage and storage[0] <= now - window:
+                storage.popleft()
             
             # Check if limit exceeded
-            if len(rate_limit_storage[key]) >= max_requests:
+            if len(storage) >= max_requests:
                 logger.warning(f"Rate limit exceeded for IP: {client_ip}")
                 return jsonify({
                     'error': 'Rate limit exceeded',
@@ -45,7 +103,7 @@ def rate_limit(max_requests=100, window=60):
                 }), 429
             
             # Add current request
-            rate_limit_storage[key].append(now)
+            storage.append(now)
             
             return f(*args, **kwargs)
         return decorated_function

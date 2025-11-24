@@ -1,9 +1,10 @@
 import React, { createContext, useContext, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion as Motion, AnimatePresence } from 'framer-motion';
 import { FaCheckCircle, FaExclamationTriangle, FaInfoCircle, FaTimes, FaSpinner } from 'react-icons/fa';
 
 const ToastContext = createContext();
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useToast = () => {
   const context = useContext(ToastContext);
   if (!context) {
@@ -91,15 +92,15 @@ export const ToastProvider = ({ children }) => {
   const getStyles = (type) => {
     switch (type) {
       case 'success':
-        return 'bg-green-500 border-green-600 text-white';
+        return 'bg-emerald-500 border-emerald-600 text-white';
       case 'error':
-        return 'bg-red-500 border-red-600 text-white';
+        return 'bg-rose-500 border-rose-600 text-white';
       case 'warning':
         return 'bg-yellow-500 border-yellow-600 text-white';
       case 'loading':
-        return 'bg-blue-500 border-blue-600 text-white';
+        return 'bg-sky-500 border-sky-600 text-white';
       default:
-        return 'bg-blue-500 border-blue-600 text-white';
+        return 'bg-sky-500 border-sky-600 text-white';
     }
   };
 
@@ -120,7 +121,7 @@ export const ToastProvider = ({ children }) => {
       <div className="fixed top-4 right-4 z-50 space-y-2">
         <AnimatePresence>
           {toasts.map((toast) => (
-            <motion.div
+            <Motion.div
               key={toast.id}
               initial={{ opacity: 0, x: 300, scale: 0.3 }}
               animate={{ opacity: 1, x: 0, scale: 1 }}
@@ -145,7 +146,7 @@ export const ToastProvider = ({ children }) => {
               {/* Progress bar */}
               {toast.progress !== null && (
                 <div className="w-full bg-white/20 rounded-full h-1.5">
-                  <motion.div
+                  <Motion.div
                     initial={{ width: 0 }}
                     animate={{ width: `${toast.progress}%` }}
                     transition={{ duration: 0.3 }}
@@ -163,7 +164,7 @@ export const ToastProvider = ({ children }) => {
                   {toast.action.label}
                 </button>
               )}
-            </motion.div>
+            </Motion.div>
           ))}
         </AnimatePresence>
       </div>

@@ -1,45 +1,123 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
+const Room = require('../models/Room');
+const User = require('../models/User');
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { readJson, writeJson } = require('../utils/store');
 
 const router = express.Router();
 
-// Rooms store: { rooms: [{ id, name, key, ownerId, createdAt }] }
-function getRooms() {
-  return readJson('rooms.json', { rooms: [] });
-}
-function saveRooms(data) {
-  writeJson('rooms.json', data);
+function generateCode() {
+  return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-router.post('/', requireAuth, requireRole('organizer'), (req, res) => {
-  const { name } = req.body;
-  if (!name) return res.status(400).json({ error: 'name required' });
-  const db = getRooms();
-  const room = {
-    id: uuidv4(),
-    name,
-    key: Math.random().toString(36).slice(2, 8).toUpperCase(),
-    ownerId: req.user.sub,
-    createdAt: new Date().toISOString(),
-  };
-  db.rooms.push(room);
-  saveRooms(db);
-  res.json(room);
+router.post('/', requireAuth, requireRole('organizer'), async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    if (!name) return res.status(400).json({ error: 'name required' });
+
+    let code = generateCode();
+    while (await Room.findOne({ code })) {
+      code = generateCode();
+    }
+
+    const room = await Room.create({
+      id: uuidv4(),
+      name,
+      description,
+      ownerId: req.user.sub,
+      code
+    });
+
+    res.json(room);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-router.get('/mine', requireAuth, requireRole('organizer'), (req, res) => {
-  const db = getRooms();
-  const rooms = db.rooms.filter(r => r.ownerId === req.user.sub);
-  res.json(rooms);
+router.get('/mine', requireAuth, requireRole('organizer'), async (req, res) => {
+  try {
+    const rooms = await Room.find({ ownerId: req.user.sub });
+    res.json(rooms);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-router.get('/by-key/:key', (req, res) => {
-  const db = getRooms();
-  const room = db.rooms.find(r => r.key === req.params.key.toUpperCase());
-  if (!room) return res.status(404).json({ error: 'Room not found' });
-  res.json(room);
+router.get('/by-code/:code', requireAuth, async (req, res) => {
+  try {
+    const room = await Room.findOne({ code: req.params.code.toUpperCase() });
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    res.json(room);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Backward compatibility: by-key also searches by code
+router.get('/by-key/:key', async (req, res) => {
+  try {
+    const room = await Room.findOne({ code: req.params.key.toUpperCase() });
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    res.json(room);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Join a room by code
+router.post('/join', requireAuth, async (req, res) => {
+  try {
+    const { code } = req.body;
+    const room = await Room.findOne({ code: code?.toUpperCase() });
+    if (!room) {
+      return res.status(404).json({ error: 'Room not found' });
+    }
+
+    const user = await User.findOne({ id: req.user.sub });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.joinedRooms.some(r => r.toString() === room._id.toString())) {
+      user.joinedRooms.push(room._id);
+    }
+
+    await user.save();
+
+    res.json({ message: 'Joined room successfully', room });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get joined rooms
+router.get('/joined', requireAuth, async (req, res) => {
+  try {
+    const user = await User.findOne({ id: req.user.sub }).populate('joinedRooms');
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json(user.joinedRooms);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/:roomId', requireAuth, async (req, res) => {
+  try {
+    const room = await Room.findOne({ id: req.params.roomId });
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+
+    if (req.user.role === 'organizer') {
+      if (room.ownerId !== req.user.sub) return res.status(403).json({ error: 'Forbidden' });
+    } else {
+      const user = await User.findOne({ id: req.user.sub }).populate('joinedRooms');
+      const joined = user?.joinedRooms?.some(r => r.id === room.id || r._id.toString() === room._id.toString());
+      if (!joined) return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    res.json(room);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 module.exports = router;

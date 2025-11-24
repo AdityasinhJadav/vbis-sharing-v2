@@ -11,8 +11,8 @@ import logging
 from face_recognition_advanced import advanced_face_service
 from insightface_faiss_service import insightface_faiss_service
 from security_middleware import (
-    rate_limit, validate_file_upload, validate_json_input, 
-    log_request, error_handler, security_headers
+    rate_limit, validate_file_upload, validate_json_input,
+    log_request, error_handler, security_headers, require_service_secret
 )
 
 # Load environment variables
@@ -45,8 +45,8 @@ if not insightface_faiss_service.initialized:
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint"""
-    return jsonify({
+    """Health check endpoint with model verification"""
+    status = {
         'status': 'ok',
         'message': 'FaceMatch Advanced Flask Backend is running!',
         'service': 'Advanced FaceMatch Backend',
@@ -55,10 +55,25 @@ def health_check():
         'model_type': 'deep_learning_cnn',
         'accuracy_level': 'industrial_grade',
         'insightface_ready': insightface_faiss_service.initialized
-    })
+    }
+    
+    # Test InsightFace model if initialized
+    if insightface_faiss_service.initialized:
+        try:
+            import numpy as np
+            test_img = np.zeros((100, 100, 3), dtype=np.uint8)
+            _ = insightface_faiss_service.app.get(test_img)
+            status['insightface_test'] = 'passed'
+        except Exception as e:
+            status['insightface_test'] = f'failed: {str(e)}'
+            status['status'] = 'degraded'
+            logger.warning(f"InsightFace model test failed: {e}")
+    
+    return jsonify(status)
 
 @app.route('/api/face/analyze', methods=['POST'])
 @rate_limit(max_requests=20, window=60)
+@require_service_secret
 @validate_file_upload
 @log_request
 @error_handler
@@ -112,6 +127,7 @@ def analyze_face():
 
 @app.route('/api/face/analyze-url', methods=['POST'])
 @rate_limit(max_requests=20, window=60)
+@require_service_secret
 @validate_json_input(['image_url'])
 @log_request
 @error_handler
@@ -170,6 +186,7 @@ def analyze_face_from_url():
 
 @app.route('/api/face/match', methods=['POST'])
 @rate_limit(max_requests=10, window=60)
+@require_service_secret
 @validate_json_input(['user_descriptor', 'collection_descriptors'])
 @log_request
 @error_handler
@@ -249,6 +266,7 @@ def match_faces():
 
 @app.route('/api/v2/analyze', methods=['POST'])
 @rate_limit(max_requests=20, window=60)
+@require_service_secret
 @validate_file_upload
 @log_request
 @error_handler
@@ -286,7 +304,8 @@ def v2_analyze():
         return jsonify({'success': False, 'message': 'Internal error during analysis'}), 500
 
 @app.route('/api/v2/ingest', methods=['POST'])
-@rate_limit(max_requests=5, window=60)
+@rate_limit(max_requests=30, window=60)  # Increased for bulk processing
+@require_service_secret
 @validate_json_input(['event_id', 'photo_id'])
 @log_request
 @error_handler
@@ -313,14 +332,15 @@ def v2_ingest():
             return jsonify({'success': False, 'message': 'InsightFace service not available'}), 500
         
         # Attempt ingestion
-        ok = insightface_faiss_service.ingest(event_id, photo_id, image_url=image_url, embedding=embedding)
+        ok, error_msg = insightface_faiss_service.ingest(event_id, photo_id, image_url=image_url, embedding=embedding)
         
         if ok:
             logger.info(f"✅ Successfully ingested photo {photo_id} for event {event_id}")
             return jsonify({'success': True, 'message': f'Photo {photo_id} ingested successfully'})
         else:
-            logger.warning(f"❌ Failed to ingest photo {photo_id} for event {event_id}")
-            return jsonify({'success': False, 'message': f'Failed to ingest photo {photo_id}'})
+            error_message = error_msg or f'Failed to ingest photo {photo_id}'
+            logger.warning(f"❌ Failed to ingest photo {photo_id} for event {event_id}: {error_message}")
+            return jsonify({'success': False, 'message': error_message})
             
     except Exception as e:
         logger.error(f"v2 ingest error: {e}")
@@ -329,6 +349,7 @@ def v2_ingest():
 
 @app.route('/api/v2/match', methods=['POST'])
 @rate_limit(max_requests=10, window=60)
+@require_service_secret
 @validate_json_input(['event_id', 'user_embedding'])
 @log_request
 @error_handler
@@ -339,8 +360,9 @@ def v2_match():
         data = request.get_json()
         event_id = data.get('event_id')
         user_embedding = data.get('user_embedding')
-        top_k = int(data.get('top_k', 20))
-        threshold = float(data.get('threshold', 0.35))
+        top_k = int(data.get('top_k', 50))  # Increased default to get more results
+        # Default threshold 0.4 for better recall (catches more true matches)
+        threshold = float(data.get('threshold', 0.4))
         if not event_id or not isinstance(user_embedding, list):
             return jsonify({'success': False, 'message': 'event_id and user_embedding are required'}), 400
         matches = insightface_faiss_service.match(event_id, user_embedding, top_k=top_k, threshold=threshold)
@@ -350,6 +372,7 @@ def v2_match():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/v2/clear-event', methods=['POST'])
+@require_service_secret
 def v2_clear_event():
     """Clear FAISS index and face recognition cache for a specific event."""
     try:
@@ -378,6 +401,7 @@ def v2_clear_event():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/v2/faiss-status', methods=['GET'])
+@require_service_secret
 def v2_faiss_status():
     """Check FAISS index status for an event."""
     try:
@@ -600,4 +624,12 @@ if __name__ == '__main__':
     # Configure app for production-like settings
     app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB max file size
     
-    app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
+    # Get environment settings
+    debug_mode = os.getenv('FLASK_ENV') == 'development' or os.getenv('FLASK_DEBUG') == '1'
+    port = int(os.getenv('PORT', 5000))
+    host = os.getenv('HOST', '0.0.0.0')
+    
+    if debug_mode:
+        logger.warning("⚠️  Running in DEBUG mode - not suitable for production!")
+    
+    app.run(debug=debug_mode, host=host, port=port, threaded=True)

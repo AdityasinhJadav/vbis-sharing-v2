@@ -10,6 +10,7 @@ require('dotenv').config();
 const {
   generalLimiter,
   authLimiter,
+  signupLimiter,
   uploadLimiter,
   securityHeaders,
   validateEnvironment,
@@ -18,6 +19,11 @@ const {
   logger
 } = require('./middleware/security');
 const { monitoring } = require('./middleware/monitoring');
+const { connectDB } = require('./config/database');
+const requestIdMiddleware = require('./middleware/requestId');
+
+// Connect to Database
+connectDB();
 
 const authRoutes = require('./routes/auth');
 const roomsRoutes = require('./routes/rooms');
@@ -50,6 +56,7 @@ const logsDir = path.join(__dirname, '..', 'logs');
 });
 
 // Security middleware (order matters!)
+app.use(requestIdMiddleware); // Add request ID first for tracking
 app.use(securityHeaders);
 app.use(compression());
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
@@ -68,11 +75,11 @@ app.use(cors({
 
 // Rate limiting
 app.use('/api', generalLimiter);
-app.use('/api/auth', authLimiter);
+// Note: authLimiter and signupLimiter are applied per-route in auth.js
 app.use('/api/uploads', uploadLimiter);
 
 // Body parsing with limits
-app.use(express.json({ 
+app.use(express.json({
   limit: '10mb',
   verify: (req, res, buf) => {
     // Add raw body for signature verification if needed
@@ -88,7 +95,50 @@ app.use('/uploads', express.static(absoluteUploadDir));
 app.get('/api/health', async (req, res) => {
   try {
     const healthStatus = await monitoring.getHealthStatus();
-    res.status(healthStatus.status === 'healthy' ? 200 : 503).json(healthStatus);
+    
+    // Check Flask service health
+    let flaskHealth = { status: 'unknown', message: 'Not checked' };
+    try {
+      const flaskClient = require('./services/flaskClient');
+      const axios = require('axios');
+      const flaskBaseURL = process.env.FLASK_SERVICE_URL;
+      
+      if (flaskBaseURL) {
+        const response = await axios.get(`${flaskBaseURL}/health`, { timeout: 5000 });
+        flaskHealth = {
+          status: response.data.status === 'ok' ? 'healthy' : 'unhealthy',
+          message: response.data.message || 'Flask service responding',
+          faceRecognitionReady: response.data.face_recognition_ready || false,
+          insightfaceReady: response.data.insightface_ready || false
+        };
+      }
+    } catch (error) {
+      flaskHealth = {
+        status: 'unhealthy',
+        message: `Flask service unreachable: ${error.message}`,
+        error: true
+      };
+    }
+    
+    // Check MongoDB connection
+    const mongoose = require('mongoose');
+    const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+    
+    const overallStatus = healthStatus.status === 'healthy' && 
+                         flaskHealth.status === 'healthy' && 
+                         dbStatus === 'connected' ? 'healthy' : 'degraded';
+    
+    res.status(overallStatus === 'healthy' ? 200 : 503).json({
+      ...healthStatus,
+      services: {
+        database: {
+          status: dbStatus === 'connected' ? 'healthy' : 'unhealthy',
+          type: 'MongoDB'
+        },
+        flask: flaskHealth
+      },
+      overall: overallStatus
+    });
   } catch (error) {
     logger.error('Health check failed:', error);
     res.status(503).json({
@@ -104,7 +154,7 @@ app.get('/api/metrics', async (req, res) => {
   try {
     const systemMetrics = await monitoring.getSystemMetrics();
     const appMetrics = monitoring.getApplicationMetrics();
-    
+
     res.json({
       timestamp: new Date().toISOString(),
       system: systemMetrics,
@@ -124,10 +174,10 @@ app.use('/api/match', matchRoutes);
 
 // 404 handler
 app.use((req, res) => {
-  logger.warn('404 - Route not found', { 
-    url: req.originalUrl, 
+  logger.warn('404 - Route not found', {
+    url: req.originalUrl,
     method: req.method,
-    ip: req.ip 
+    ip: req.ip
   });
   res.status(404).json({ error: 'Route not found' });
 });

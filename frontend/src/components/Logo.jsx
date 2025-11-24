@@ -11,8 +11,8 @@ const Logo = ({ width = 120, height = 40, className = "" }) => {
     >
       <defs>
         <linearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" style={{stopColor:"#667eea", stopOpacity:1}} />
-          <stop offset="100%" style={{stopColor:"#764ba2", stopOpacity:1}} />
+          <stop offset="0%" style={{stopColor:"#38bdf8", stopOpacity:1}} />
+          <stop offset="100%" style={{stopColor:"#8b5cf6", stopOpacity:1}} />
         </linearGradient>
       </defs>
       

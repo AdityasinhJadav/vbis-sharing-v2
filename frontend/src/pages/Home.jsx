@@ -1,7 +1,7 @@
 import React from "react";
 import { FaSun, FaMoon } from "react-icons/fa";
 import { Link } from "react-router-dom";
-import { motion } from "framer-motion";
+import { motion as Motion } from "framer-motion";
 import { useTheme } from "../theme/ThemeContext";
 
 export default function Home() {
@@ -11,17 +11,17 @@ export default function Home() {
     {
       title: "Secure Face Recognition",
       description: "Advanced AI-powered facial recognition ensures only authorized users can access your precious memories",
-      gradient: "from-sky-400 to-blue-500"
+      gradient: "from-sky-400 to-sky-500"
     },
     {
       title: "Smart Photo Sharing",
       description: "Effortlessly share photos with friends and family using intelligent facial verification technology",
-      gradient: "from-emerald-400 to-teal-500"
+      gradient: "from-sky-400 to-purple-500"
     },
     {
       title: "Lightning Fast",
       description: "Get instant access to your photos with our cutting-edge matching algorithms",
-      gradient: "from-purple-400 to-pink-500"
+      gradient: "from-purple-400 to-purple-500"
     }
   ];
 
@@ -36,7 +36,7 @@ export default function Home() {
       <div className="absolute inset-0">
         <div className={`absolute top-20 left-10 w-72 h-72 rounded-full blur-3xl animate-pulse ${isLight ? "bg-sky-400/20" : "bg-sky-400/10"}`}></div>
         <div className={`absolute bottom-20 right-10 w-96 h-96 rounded-full blur-3xl animate-pulse delay-1000 ${isLight ? "bg-purple-400/20" : "bg-purple-400/10"}`}></div>
-        <div className={`absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-80 h-80 rounded-full blur-3xl animate-pulse delay-2000 ${isLight ? "bg-emerald-400/10" : "bg-emerald-400/5"}`}></div>
+        <div className={`absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-80 h-80 rounded-full blur-3xl animate-pulse delay-2000 ${isLight ? "bg-sky-400/10" : "bg-sky-400/5"}`}></div>
       </div>
 
       {/* Hero Section */}
@@ -56,7 +56,7 @@ export default function Home() {
             {isLight ? <FaMoon /> : <FaSun />}
           </button>
         </div>
-        <motion.div
+        <Motion.div
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 1, ease: "easeOut" }}
@@ -66,13 +66,13 @@ export default function Home() {
           <h1 className={`text-7xl md:text-8xl font-bold mb-8 leading-tight ${
             isLight
               ? "text-slate-900"
-              : "bg-clip-text text-transparent bg-gradient-to-r from-sky-400 via-purple-400 to-emerald-400"
+              : "bg-clip-text text-transparent bg-gradient-to-r from-sky-400 via-purple-400 to-sky-500"
           }`}>
             Face
             <span className={`${isLight ? "text-sky-700" : "text-white"}`}>Match</span>
           </h1>
           
-          <motion.p
+          <Motion.p
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, delay: 0.4 }}
@@ -80,15 +80,15 @@ export default function Home() {
           >
             Revolutionary AI-powered photo sharing that recognizes faces and 
             <span className={`${isLight ? "text-sky-600" : "text-sky-400"} font-semibold`}> protects your memories</span> like never before.
-          </motion.p>
+          </Motion.p>
           
-          <motion.div
+          <Motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, delay: 0.6 }}
             className="flex flex-col sm:flex-row justify-center items-center gap-6 mb-16"
           >
-            <motion.div
+            <Motion.div
               whileHover={{ scale: 1.05, y: -2 }}
               whileTap={{ scale: 0.98 }}
               className="group"
@@ -98,14 +98,14 @@ export default function Home() {
                 className={`px-10 py-4 rounded-xl font-bold text-lg shadow-2xl transition-all duration-300 ${
                   isLight
                     ? "bg-sky-500 hover:bg-sky-600 text-white"
-                    : "bg-gradient-to-r from-sky-400 to-blue-500 text-white hover:shadow-sky-400/25"
+                    : "bg-gradient-to-r from-sky-400 to-sky-500 text-white hover:shadow-sky-400/25"
                 }`}
               >
                 Sign Up
               </Link>
-            </motion.div>
+            </Motion.div>
             
-            <motion.div
+            <Motion.div
               whileHover={{ scale: 1.05, y: -2 }}
               whileTap={{ scale: 0.98 }}
             >
@@ -119,29 +119,29 @@ export default function Home() {
               >
                 Login
               </Link>
-            </motion.div>
-          </motion.div>
-        </motion.div>
+            </Motion.div>
+          </Motion.div>
+        </Motion.div>
 
         {/* Features Section */}
         <div className="mt-20">
-          <motion.div
+          <Motion.div
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, delay: 0.8 }}
             className="text-center mb-16"
           >
             <h2 className={`text-4xl md:text-5xl font-bold mb-6 ${isLight ? "text-slate-900" : "text-white"}`}>
-              Why Choose <span className="bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-purple-400">FaceMatch</span>?
+              Why Choose <span className="bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-purple-500">FaceMatch</span>?
             </h2>
             <p className={`text-xl max-w-2xl mx-auto ${isLight ? "text-slate-600" : "text-slate-400"}`}>
               Experience the next generation of secure photo sharing with cutting-edge technology
             </p>
-          </motion.div>
+          </Motion.div>
 
           <div className="grid md:grid-cols-3 gap-8 max-w-7xl mx-auto px-4">
             {features.map((feature, index) => (
-              <motion.div
+              <Motion.div
                 key={index}
                 initial={{ opacity: 0, y: 40 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -168,26 +168,26 @@ export default function Home() {
                     </p>
                   </div>
                 </div>
-              </motion.div>
+              </Motion.div>
             ))}
           </div>
         </div>
 
         {/* CTA Section */}
-        <motion.div
+        <Motion.div
           initial={{ opacity: 0, y: 40 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, delay: 1.8 }}
           className="mt-20 text-center"
         >
-          <div className={`rounded-3xl p-12 max-w-4xl mx-auto border ${isLight ? "bg-white border-slate-200" : "bg-gradient-to-r from-sky-400/10 to-purple-400/10 backdrop-blur-sm border-sky-400/20"}`}>
+          <div className={`rounded-3xl p-12 max-w-4xl mx-auto border ${isLight ? "bg-white border-slate-200" : "bg-gradient-to-r from-sky-400/10 to-purple-500/10 backdrop-blur-sm border-sky-400/20"}`}>
             <h3 className={`text-3xl md:text-4xl font-bold mb-6 ${isLight ? "text-slate-900" : "text-white"}`}>
               Ready to Get Started?
             </h3>
             <p className={`text-xl mb-8 max-w-2xl mx-auto ${isLight ? "text-slate-600" : "text-slate-300"}`}>
               Join FaceMatch and experience secure photo sharing with facial recognition.
             </p>
-            <motion.div
+            <Motion.div
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.98 }}
             >
@@ -196,14 +196,14 @@ export default function Home() {
                 className={`px-12 py-4 rounded-xl font-bold text-xl shadow-2xl transition-all duration-300 ${
                   isLight
                     ? "bg-sky-500 hover:bg-sky-600 text-white"
-                    : "bg-gradient-to-r from-sky-400 to-purple-500 text-white hover:shadow-sky-400/30"
+                    : "bg-gradient-to-r from-sky-400 to-sky-500 text-white hover:shadow-sky-400/30"
                 }`}
               >
                 Sign Up Now
               </Link>
-            </motion.div>
+            </Motion.div>
           </div>
-        </motion.div>
+        </Motion.div>
       </div>
     </div>
   );
