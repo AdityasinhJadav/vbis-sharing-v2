@@ -773,7 +773,7 @@ const ViewPhotos = () => {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="relative max-w-4xl max-h-full"
+              className="relative max-w-5xl w-full max-h-[90vh] flex items-center justify-center"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Close button */}
@@ -794,7 +794,8 @@ const ViewPhotos = () => {
               <img
                 src={selectedPhoto.url || selectedPhoto.cloudinaryPublicId || ''}
                 alt={selectedPhoto.originalName || 'Photo'}
-                className="max-w-full max-h-full object-contain rounded-lg"
+                className="max-w-[90vw] max-h-[90vh] w-auto h-auto object-contain rounded-lg shadow-2xl"
+                style={{ maxWidth: 'min(90vw, 1200px)', maxHeight: '90vh' }}
               />
             </motion.div>
           </motion.div>

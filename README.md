@@ -14,15 +14,18 @@
 - **🤖 Face Recognition**: Dual-system approach with V1 (face-recognition) and V2 (InsightFace + FAISS)
 - **🔍 Photo Matching**: High-accuracy face matching with 90-95% precision
 - **📱 Modern UI**: React-based responsive frontend with Tailwind CSS
+- **📅 Event-aware Rooms**: Each room stores an optional event date and tracks joined participants for organizer insights
+- **🗑️ Safe Deletion**: Deleting a room automatically removes Cloudinary assets, database entries, and FAISS indexes
 - **⚡ Real-time Processing**: Sub-50ms search with FAISS vector indexing
 
 ### 🚀 Advanced Features
-- **🏢 Multi-tenant Architecture**: Event-based room management
+- **🏢 Multi-tenant Architecture**: Event-based room management (organizers vs attendees)
 - **📊 Performance Monitoring**: Real-time metrics and health checks
 - **🛡️ Enterprise Security**: Rate limiting, input validation, security headers
-- **🔄 Background Processing**: Async photo ingestion and processing
+- **🔄 Background Processing**: Async photo ingestion and processing with retry + status tracking
 - **📦 Bulk Operations**: Bulk photo upload and processing
 - **💾 Smart Caching**: LRU cache with TTL for optimal performance
+- **👥 Participant Counts**: Every room response includes the number of members who have joined
 - **📈 Analytics**: Comprehensive request analytics and monitoring
 
 ## 🏗️ Architecture Overview
@@ -259,8 +262,17 @@ Content-Type: application/json
 
 {
   "name": "Event Name",
-  "description": "Event description"
+  "description": "Event description",
+  "eventDate": "2025-02-14"   // Optional ISO date
 }
+```
+
+```http
+GET /api/rooms/mine
+Authorization: Bearer <jwt_token>
+// Each room includes:
+//  - eventDate (if provided)
+//  - participants (number of joined members)
 ```
 
 ```http

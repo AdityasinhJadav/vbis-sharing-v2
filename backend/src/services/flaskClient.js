@@ -83,10 +83,29 @@ async function matchFaces(eventId, embedding, { topK = 50, threshold = 0.4 } = {
   }
 }
 
+async function clearEvent(eventId) {
+  if (!flaskBaseURL) throw new Error('Flask service not configured');
+  try {
+    const { data } = await client.post(
+      '/api/v2/clear-event',
+      { event_id: eventId },
+      { headers: authHeaders() }
+    );
+    return data;
+  } catch (error) {
+    logger.error('Flask clear-event failed', {
+      eventId,
+      error: error.response?.data || error.message
+    });
+    throw error;
+  }
+}
+
 module.exports = {
   ingestPhoto,
   analyzeEmbedding,
-  matchFaces
+  matchFaces,
+  clearEvent
 };
 
 

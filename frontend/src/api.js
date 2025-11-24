@@ -35,11 +35,11 @@ export async function verifyToken(token) {
   return res.json();
 }
 
-export async function createRoom(name, description) {
+export async function createRoom(name, description, eventDate) {
   const res = await fetch(`${API_BASE}/rooms`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ name, description })
+    body: JSON.stringify({ name, description, eventDate })
   });
   if (!res.ok) throw new Error((await res.json()).error || 'Create room failed');
   return res.json();
@@ -58,6 +58,15 @@ export async function roomByKey(key) {
     headers: { ...getAuthHeaders() }
   });
   if (!res.ok) throw new Error((await res.json()).error || 'Room not found');
+  return res.json();
+}
+
+export async function deleteRoom(roomId) {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeaders() }
+  });
+  if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete room');
   return res.json();
 }
 
