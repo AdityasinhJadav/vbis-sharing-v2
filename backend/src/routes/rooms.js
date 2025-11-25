@@ -7,6 +7,9 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { cloudinary } = require('../config/cloudinary');
 const { logger } = require('../middleware/security');
 const flaskClient = require('../services/flaskClient');
+const { sendSuccess, sendAppError, sendPaginated, ErrorCodes } = require('../utils/response');
+const { AppError } = require('../utils/AppError');
+const { schemas, validate, validateQuery } = require('../utils/validation');
 
 const router = express.Router();
 
@@ -42,14 +45,18 @@ async function addParticipantCounts(rooms) {
   }));
 }
 
-router.post('/', requireAuth, requireRole('organizer'), async (req, res) => {
+router.post('/', requireAuth, requireRole('organizer'), validate(schemas.createRoom), async (req, res) => {
   try {
     const { name, description, eventDate } = req.body;
-    if (!name) return res.status(400).json({ error: 'name required' });
 
     let code = generateCode();
+    let attempts = 0;
     while (await Room.findOne({ code })) {
       code = generateCode();
+      attempts++;
+      if (attempts > 10) {
+        throw new AppError('Failed to generate unique room code', 500, ErrorCodes.INTERNAL_ERROR);
+      }
     }
 
     let normalizedDate = null;
@@ -72,9 +79,13 @@ router.post('/', requireAuth, requireRole('organizer'), async (req, res) => {
     const createdRoom = room.toObject();
     createdRoom.participants = 0;
 
-    res.json(createdRoom);
+    sendSuccess(res, createdRoom, 'Room created successfully', 201);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    if (error instanceof AppError) {
+      return sendAppError(res, error);
+    }
+    logger.error('Room creation error', { error: error.message });
+    sendAppError(res, new AppError('Failed to create room', 500, ErrorCodes.INTERNAL_ERROR));
   }
 });
 
@@ -110,30 +121,33 @@ router.get('/by-key/:key', async (req, res) => {
 });
 
 // Join a room by code
-router.post('/join', requireAuth, async (req, res) => {
+router.post('/join', requireAuth, validate(schemas.joinRoom), async (req, res) => {
   try {
     const { code } = req.body;
-    const room = await Room.findOne({ code: code?.toUpperCase() });
+    const room = await Room.findOne({ code: code.toUpperCase() });
     if (!room) {
-      return res.status(404).json({ error: 'Room not found' });
+      throw new AppError('Room not found', 404, ErrorCodes.ROOM_NOT_FOUND);
     }
 
     const user = await User.findOne({ id: req.user.sub });
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      throw new AppError('User not found', 404, ErrorCodes.USER_NOT_FOUND);
     }
 
     if (!user.joinedRooms.some(r => r.toString() === room._id.toString())) {
       user.joinedRooms.push(room._id);
+      await user.save();
     }
-
-    await user.save();
 
     const [roomWithCount] = await addParticipantCounts([room]);
 
-    res.json({ message: 'Joined room successfully', room: roomWithCount });
+    sendSuccess(res, { room: roomWithCount }, 'Joined room successfully');
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    if (error instanceof AppError) {
+      return sendAppError(res, error);
+    }
+    logger.error('Join room error', { error: error.message });
+    sendAppError(res, new AppError('Failed to join room', 500, ErrorCodes.INTERNAL_ERROR));
   }
 });
 

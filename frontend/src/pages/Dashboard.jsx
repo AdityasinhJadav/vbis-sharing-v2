@@ -71,20 +71,41 @@ const Dashboard = () => {
       return;
     }
     
+    // Optimistic update - add temporary room to UI
+    const tempRoom = {
+      id: 'temp-' + Date.now(),
+      name: roomName.trim(),
+      description: roomDescription.trim() || undefined,
+      eventDate: eventDate || undefined,
+      code: '...',
+      participants: 0,
+      isOptimistic: true
+    };
+    
+    setMyRoomsList(prev => [tempRoom, ...prev]);
+    setRoomName('');
+    setRoomDescription('');
+    setEventDate('');
+    setShowCreateModal(false);
+    setActionMessage('');
+    setError('');
+    
     try {
       setIsCreating(true);
-      setActionMessage('');
-      setError('');
-      const room = await createRoom(roomName.trim(), roomDescription.trim() || undefined, eventDate || undefined);
-      setMyRoomsList(prev => [room, ...prev]);
-      setRoomName('');
-      setRoomDescription('');
-      setEventDate('');
-      setShowCreateModal(false);
+      const room = await createRoom(tempRoom.name, tempRoom.description, tempRoom.eventDate);
+      
+      // Replace temporary room with actual room
+      setMyRoomsList(prev => prev.map(r => r.id === tempRoom.id ? room : r));
       setActionMessage(`Successfully created "${room.name}"`);
       setTimeout(() => setActionMessage(''), 5000);
     } catch (err) {
+      // Rollback on error
+      setMyRoomsList(prev => prev.filter(r => r.id !== tempRoom.id));
       setError(err.message || 'Failed to create room');
+      setShowCreateModal(true);
+      setRoomName(tempRoom.name);
+      setRoomDescription(tempRoom.description || '');
+      setEventDate(tempRoom.eventDate || '');
     } finally {
       setIsCreating(false);
     }
@@ -114,19 +135,26 @@ const Dashboard = () => {
 
   const handleDeleteRoom = async () => {
     if (!roomToDelete) return;
+    
+    // Optimistic update - remove from UI immediately
+    const roomName = roomToDelete.name;
+    const previousRooms = [...myRoomsList];
+    setMyRoomsList(prev => prev.filter(r => r.id !== roomToDelete.id));
+    setRoomToDelete(null);
+    setDeleteConfirmation('');
+    setActionMessage('');
+    setError('');
+    
     try {
       setDeletingRoomId(roomToDelete.id);
-      setActionMessage('');
-      setError('');
       await deleteRoom(roomToDelete.id);
-      setMyRoomsList(prev => prev.filter(r => r.id !== roomToDelete.id));
-      setRoomToDelete(null);
-      setDeleteConfirmation('');
-      setEventDate('');
-      setActionMessage(`Deleted "${roomToDelete.name}"`);
+      setActionMessage(`Deleted "${roomName}"`);
       setTimeout(() => setActionMessage(''), 5000);
     } catch (err) {
+      // Rollback on error
+      setMyRoomsList(previousRooms);
       setError(err.message || 'Failed to delete room');
+      setRoomToDelete({ id: roomToDelete.id, name: roomName });
     } finally {
       setDeletingRoomId(null);
     }
@@ -170,14 +198,14 @@ const Dashboard = () => {
             {isOrganizer && onDelete && (
               <button
                 onClick={onDelete}
-                className={`p-2 rounded-full border transition-colors ${
+                className={`p-2.5 rounded-full border transition-all shadow-md ${
                   isLight
-                    ? 'border-rose-200 text-rose-500 hover:bg-rose-50'
-                    : 'border-rose-900/40 text-rose-300 hover:bg-rose-900/20'
+                    ? 'border-rose-200 text-rose-500 hover:bg-rose-50 hover:border-rose-300'
+                    : 'border-red-500/60 bg-red-600/20 text-red-300 hover:bg-red-600/40 hover:border-red-500 hover:text-white'
                 }`}
                 title="Delete room"
               >
-                <FaTrash className="w-3.5 h-3.5" />
+                <FaTrash className="w-4 h-4" />
                 <span className="sr-only">Delete room</span>
               </button>
             )}

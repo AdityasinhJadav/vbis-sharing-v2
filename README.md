@@ -41,6 +41,12 @@
 │ • Dashboard     │    │ • Monitoring    │    │ • FAISS Search  │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │
+         │                       │                       │
+         │              ┌─────────────────┐             │
+         │              │    MongoDB      │             │
+         │              │   (Database)    │             │
+         │              └─────────────────┘             │
+         │                       │                       │
          └───────────────────────┼───────────────────────┘
                                  │
                     ┌─────────────────┐
@@ -48,6 +54,8 @@
                     │  (Image Storage)│
                     └─────────────────┘
 ```
+
+> **Note:** See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed explanation of why two backends are needed.
 
 ## 📁 Project Structure
 
@@ -57,11 +65,15 @@ face-match/
 │   ├── 📁 src/
 │   │   ├── 📁 config/         # Configuration files
 │   │   ├── 📁 middleware/     # Security, auth, monitoring
+│   │   ├── 📁 models/         # MongoDB models (User, Room, Photo)
 │   │   ├── 📁 routes/         # API endpoints
+│   │   ├── 📁 services/       # External service clients
 │   │   └── 📁 utils/          # Utility functions
-│   ├── 📁 data/               # JSON data storage
+│   ├── 📁 data/               # JSON data storage (legacy)
 │   ├── 📁 logs/               # Application logs
-│   └── 📁 uploads/            # Local file uploads
+│   ├── 📁 scripts/            # Utility scripts
+│   ├── 📁 uploads/            # Local file uploads
+│   └── 📄 setup.js            # Automated setup script
 │
 ├── 📁 frontend/               # React/Vite Application
 │   ├── 📁 src/
@@ -88,7 +100,8 @@ face-match/
 
 - **Node.js** 18+ and npm
 - **Python** 3.8+ (3.9 recommended) with pip
-- **Cloudinary Account** (for image storage)
+- **MongoDB** 4.4+ (local installation or MongoDB Atlas)
+- **Cloudinary Account** (for image storage) - [Get free account](https://cloudinary.com/users/register/free)
 
 ### 1. Clone and Install
 
@@ -102,35 +115,122 @@ cd backend && npm install
 cd ../frontend && npm install
 ```
 
-### 2. Environment Setup
+### 2. Database Setup
 
-#### Backend Configuration (`backend/.env`)
+#### Install MongoDB
+
+**Windows:**
+- Download from [MongoDB Community Server](https://www.mongodb.com/try/download/community)
+- Install and start MongoDB service
+
+**macOS:**
+```bash
+brew tap mongodb/brew
+brew install mongodb-community
+brew services start mongodb-community
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt-get install -y mongodb
+sudo systemctl start mongodb
+sudo systemctl enable mongodb
+```
+
+**Or use MongoDB Atlas (Cloud):**
+- Sign up at [MongoDB Atlas](https://www.mongodb.com/cloud/atlas)
+- Create a free cluster
+- Get your connection string
+
+#### Initialize Database
+
+The database will be automatically created on first connection. No manual setup required.
+
+### 3. Environment Setup
+
+#### Quick Setup (Recommended)
+
+Use the automated setup script:
+
+```bash
+cd backend
+node setup.js
+```
+
+This will create a `.env` file with a secure JWT secret and all required variables.
+
+#### Manual Backend Configuration (`backend/.env`)
+
 ```env
 # Server Configuration
 PORT=4000
 NODE_ENV=development
 
-# Security
-JWT_SECRET=your_super_secure_jwt_secret_here
+# Database Configuration (REQUIRED)
+MONGODB_URI=mongodb://localhost:27017/facematch
+# For MongoDB Atlas: mongodb+srv://username:password@cluster.mongodb.net/facematch
+
+# Security (REQUIRED - must be at least 32 characters)
+JWT_SECRET=your_super_secure_jwt_secret_here_minimum_32_characters_long
 
 # File Storage
 UPLOAD_DIR=uploads
 DATA_DIR=data
 
-# Cloudinary Configuration
+# Cloudinary Configuration (REQUIRED)
 CLOUDINARY_CLOUD_NAME=your_cloud_name
 CLOUDINARY_API_KEY=your_api_key
 CLOUDINARY_API_SECRET=your_api_secret
 
-# Flask Service
+# Flask Service Configuration
 FLASK_SERVICE_URL=http://localhost:5000
+FLASK_SERVICE_SECRET=your_shared_secret_between_backends
+
+# Frontend URL
+FRONTEND_URL=http://localhost:5173
+```
+
+#### Flask Backend Configuration (`flask-backend/.env`)
+
+```env
+# Flask Settings
+FLASK_ENV=development
+FLASK_DEBUG=0
+PORT=5000
+HOST=0.0.0.0
+
+# Security (REQUIRED - must match backend FLASK_SERVICE_SECRET)
+FLASK_SERVICE_SECRET=your_shared_secret_between_backends
+
+# Face Recognition Settings
+MODEL_NAME=buffalo_l
+DET_SIZE=640,640
+DEFAULT_THRESHOLD=0.4
+MAX_TOP_K=50
+
+# FAISS Settings
+FAISS_INDEX_PATH=./faiss_store
+FAISS_AUTO_SAVE_INTERVAL=300
+
+# Rate Limiting
+RATE_LIMIT_ANALYZE=20
+RATE_LIMIT_MATCH=10
+RATE_LIMIT_INGEST=30
+
+# GPU (Optional)
+GPU_ENABLED=false
 ```
 
 #### Frontend Configuration (`frontend/.env`)
+
 ```env
 # API Configuration
 VITE_API_BASE=http://localhost:4000/api
-VITE_FLASK_API_BASE=http://localhost:5000
+VITE_FLASK_API_URL=http://localhost:5000/api
+
+# Cloudinary Configuration (Optional - for direct uploads)
+VITE_CLOUDINARY_CLOUD_NAME=your_cloud_name
+VITE_CLOUDINARY_UPLOAD_PRESET=your_upload_preset
 
 # Firebase (Optional)
 VITE_FIREBASE_API_KEY=your_firebase_api_key
@@ -138,7 +238,25 @@ VITE_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
 VITE_FIREBASE_PROJECT_ID=your_project_id
 ```
 
-### 3. Start Services
+> **Note:** See [CLOUDINARY_SETUP.md](CLOUDINARY_SETUP.md) for detailed Cloudinary configuration help.
+
+### 4. Start Services
+
+#### Start MongoDB
+
+**Local MongoDB:**
+```bash
+# Windows (if installed as service, it starts automatically)
+# Or start manually:
+mongod
+
+# macOS/Linux
+sudo systemctl start mongodb
+# Or:
+mongod
+```
+
+**MongoDB Atlas:** No local setup needed, just use your connection string.
 
 #### Start Node.js Backend
 ```bash
@@ -149,13 +267,38 @@ npm run dev
 ```
 
 #### Start Flask Face Recognition Service
+
+**First-time setup:**
 ```bash
 cd flask-backend
-python install_advanced.py  # Install dependencies
-python run_advanced.py      # Start the service
-# Service available at http://localhost:5000
-# Health check: http://localhost:5000/health
+
+# Create virtual environment (recommended)
+python -m venv venv
+
+# Activate virtual environment
+# Windows:
+venv\Scripts\activate
+# macOS/Linux:
+source venv/bin/activate
+
+# Install dependencies
+python install_advanced.py  # Or: pip install -r requirements-advanced.txt
+
+# Start the service
+python run_advanced.py
 ```
+
+**Subsequent runs:**
+```bash
+cd flask-backend
+# Activate virtual environment (if not already active)
+source venv/bin/activate  # or venv\Scripts\activate on Windows
+python run_advanced.py
+```
+
+**Service available at:**
+- URL: http://localhost:5000
+- Health check: http://localhost:5000/health
 
 #### Start React Frontend
 ```bash
@@ -482,18 +625,96 @@ CMD ["npm", "start"]
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🆘 Support
+## 📖 Additional Documentation
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Detailed architecture explanation (why two backends?)
+- **[CLOUDINARY_SETUP.md](CLOUDINARY_SETUP.md)** - Cloudinary setup and troubleshooting guide
+- **[IMPROVEMENTS_IMPLEMENTED.md](IMPROVEMENTS_IMPLEMENTED.md)** - Recent improvements and features
+- **[COMPREHENSIVE_IMPROVEMENTS_AND_FEATURES.md](COMPREHENSIVE_IMPROVEMENTS_AND_FEATURES.md)** - Complete improvement suggestions
+
+## 🛠️ Available Scripts
+
+### Backend Scripts
+
+```bash
+# Development server with hot reload
+npm run dev
+
+# Production server
+npm start
+
+# Process existing photos (for migration)
+npm run process-photos
+```
+
+### Flask Scripts
+
+```bash
+# Install dependencies
+python install_advanced.py
+
+# Run service
+python run_advanced.py
+
+# Bulk photo ingestion
+python bulk_ingest.py
+
+# Manual photo ingestion
+python manual_ingest.py
+```
+
+## 🆘 Support & Troubleshooting
 
 ### Common Issues
 
+**Q: MongoDB connection error?**
+A: 
+- Ensure MongoDB is running: `mongod` or check service status
+- Verify `MONGODB_URI` in `backend/.env` is correct
+- For MongoDB Atlas, check network access and credentials
+- Check MongoDB logs for connection issues
+
 **Q: Face recognition not working?**
-A: Ensure Flask service is running and dependencies are installed correctly.
+A: 
+- Ensure Flask service is running: `python run_advanced.py`
+- Check Flask health endpoint: http://localhost:5000/health
+- Verify Python dependencies are installed: `pip install -r requirements-advanced.txt`
+- Check Flask logs for errors
+- Ensure `FLASK_SERVICE_SECRET` matches in both backends
 
 **Q: Upload failures?**
-A: Check Cloudinary configuration and file size limits.
+A: 
+- Check Cloudinary configuration in `backend/.env`
+- Verify Cloudinary credentials are correct
+- See [CLOUDINARY_SETUP.md](CLOUDINARY_SETUP.md) for detailed help
+- Check file size limits (default: 10MB)
+- Verify file format is supported (jpg, png, webp)
+
+**Q: "Invalid cloud_name" error?**
+A: See [CLOUDINARY_SETUP.md](CLOUDINARY_SETUP.md) for step-by-step setup guide.
+
+**Q: JWT authentication errors?**
+A: 
+- Ensure `JWT_SECRET` is at least 32 characters long
+- Verify token is being sent in Authorization header
+- Check token expiration
+- Clear browser localStorage and re-login
 
 **Q: Performance issues?**
-A: Monitor system resources and consider GPU acceleration for large datasets.
+A: 
+- Monitor system resources (CPU, memory)
+- Consider GPU acceleration for Flask service (set `GPU_ENABLED=true`)
+- Check database indexes are created
+- Monitor API response times via health endpoint
+- Consider scaling services separately
+
+**Q: Flask service won't start?**
+A: 
+- Ensure Python 3.8+ is installed: `python --version`
+- Activate virtual environment: `source venv/bin/activate`
+- Install dependencies: `pip install -r requirements-advanced.txt`
+- Check for port conflicts (port 5000)
+- Review Flask logs for specific errors
 
 ### Getting Help
 
@@ -501,6 +722,21 @@ A: Monitor system resources and consider GPU acceleration for large datasets.
 - 💬 Discord: [Join our community](https://discord.gg/facematch)
 - 📖 Documentation: [Full docs](https://docs.facematch.com)
 - 🐛 Issues: [GitHub Issues](https://github.com/your-username/face-match/issues)
+
+## ✨ Recent Improvements
+
+This project has been enhanced with several improvements:
+
+- ✅ **Standardized Error Handling** - Consistent error responses with error codes
+- ✅ **Request Validation** - Joi-based validation for all endpoints
+- ✅ **Enhanced API Client** - Automatic retry, error handling, and progress tracking
+- ✅ **Optimistic Updates** - Better UX with immediate UI feedback
+- ✅ **Database Indexes** - Optimized queries for better performance
+- ✅ **Pagination Support** - Efficient handling of large photo collections
+- ✅ **Enhanced Health Checks** - Comprehensive service monitoring
+- ✅ **Configuration Management** - Centralized and validated configuration
+
+See [IMPROVEMENTS_IMPLEMENTED.md](IMPROVEMENTS_IMPLEMENTED.md) for complete details.
 
 ## 🎉 Acknowledgments
 
@@ -510,6 +746,7 @@ A: Monitor system resources and consider GPU acceleration for large datasets.
 - **React** and **Vite** for the frontend framework
 - **Express.js** for the backend API
 - **Flask** for the face recognition service
+- **MongoDB** for robust data storage
 
 ---
 

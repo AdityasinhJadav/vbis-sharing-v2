@@ -6,6 +6,8 @@ const User = require('../models/User');
 const { requireAuth } = require('../middleware/auth');
 const { validateFileUpload, logger } = require('../middleware/security');
 const flaskClient = require('../services/flaskClient');
+const { sendSuccess, sendAppError, ErrorCodes } = require('../utils/response');
+const { AppError } = require('../utils/AppError');
 
 const router = express.Router();
 
@@ -32,22 +34,30 @@ router.post('/:roomId', requireAuth, memoryUpload.single('photo'), validateFileU
   try {
     const { roomId } = req.params;
     const room = await Room.findOne({ id: roomId });
-    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (!room) {
+      throw new AppError('Room not found', 404, ErrorCodes.ROOM_NOT_FOUND);
+    }
 
     if (req.user.role === 'organizer') {
       if (room.ownerId !== req.user.sub) {
-        return res.status(403).json({ error: 'Forbidden' });
+        throw new AppError('Forbidden', 403, ErrorCodes.FORBIDDEN);
       }
     } else {
       const user = await User.findOne({ id: req.user.sub }).populate('joinedRooms');
       const joined = user?.joinedRooms?.some(r => r.id === room.id || r._id.toString() === room._id.toString());
-      if (!joined) return res.status(403).json({ error: 'You have not joined this room' });
+      if (!joined) {
+        throw new AppError('You have not joined this room', 403, ErrorCodes.FORBIDDEN);
+      }
     }
 
     const file = req.file;
     const analysis = await flaskClient.analyzeEmbedding(file.buffer, file.originalname);
     if (!analysis.success || !analysis.embedding) {
-      return res.status(400).json({ error: analysis.message || 'Face not detected' });
+      throw new AppError(
+        analysis.message || 'No face detected in the image. Please ensure the photo shows a clear, front-facing face.',
+        400,
+        ErrorCodes.NO_FACE_DETECTED
+      );
     }
 
     // Use threshold 0.4 for better recall (catches more true matches while maintaining accuracy)
@@ -107,14 +117,16 @@ router.post('/:roomId', requireAuth, memoryUpload.single('photo'), validateFileU
       matchesCount: matchesWithMetadata.length
     });
 
-    res.json({
-      success: true,
+    sendSuccess(res, {
       matches: matchesWithMetadata,
       threshold: matchResult.threshold_used
-    });
+    }, 'Face matching completed');
   } catch (error) {
+    if (error instanceof AppError) {
+      return sendAppError(res, error);
+    }
     logger.error('Match failed', { error: error.message });
-    res.status(500).json({ error: 'Face matching failed' });
+    sendAppError(res, new AppError('Face matching failed', 500, ErrorCodes.FACE_MATCHING_FAILED));
   }
 });
 

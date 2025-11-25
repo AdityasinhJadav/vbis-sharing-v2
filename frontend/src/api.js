@@ -1,28 +1,32 @@
+import { apiPost, apiGet, apiPut, apiDelete, apiUpload } from './utils/apiClient';
+import { extractError } from './utils/errorHandler';
+
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000/api';
 
+// Legacy function for backward compatibility
 function getAuthHeaders() {
   const token = localStorage.getItem('token');
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export async function signup({ email, password, role, username }) {
-  const res = await fetch(`${API_BASE}/auth/signup`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, role, username })
-  });
-  if (!res.ok) throw new Error((await res.json()).error || 'Signup failed');
-  return res.json();
+  try {
+    const response = await apiPost('/auth/signup', { email, password, role, username });
+    return response.data || response;
+  } catch (error) {
+    const errorInfo = extractError(error);
+    throw new Error(errorInfo.message);
+  }
 }
 
 export async function login({ email, password }) {
-  const res = await fetch(`${API_BASE}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password })
-  });
-  if (!res.ok) throw new Error((await res.json()).error || 'Login failed');
-  return res.json();
+  try {
+    const response = await apiPost('/auth/login', { email, password });
+    return response.data || response;
+  } catch (error) {
+    const errorInfo = extractError(error);
+    throw new Error(errorInfo.message);
+  }
 }
 
 export async function verifyToken(token) {
@@ -36,21 +40,23 @@ export async function verifyToken(token) {
 }
 
 export async function createRoom(name, description, eventDate) {
-  const res = await fetch(`${API_BASE}/rooms`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ name, description, eventDate })
-  });
-  if (!res.ok) throw new Error((await res.json()).error || 'Create room failed');
-  return res.json();
+  try {
+    const response = await apiPost('/rooms', { name, description, eventDate });
+    return response.data || response;
+  } catch (error) {
+    const errorInfo = extractError(error);
+    throw new Error(errorInfo.message);
+  }
 }
 
 export async function myRooms() {
-  const res = await fetch(`${API_BASE}/rooms/mine`, {
-    headers: { ...getAuthHeaders() }
-  });
-  if (!res.ok) throw new Error((await res.json()).error || 'Fetch rooms failed');
-  return res.json();
+  try {
+    const response = await apiGet('/rooms/mine');
+    return response.data || response;
+  } catch (error) {
+    const errorInfo = extractError(error);
+    throw new Error(errorInfo.message);
+  }
 }
 
 export async function roomByKey(key) {
@@ -139,16 +145,48 @@ export async function uploadCandidate(roomId, file) {
   return res.json();
 }
 
+export async function deletePhoto(photoId) {
+  try {
+    const response = await apiDelete(`/uploads/${photoId}`);
+    return response.data || response;
+  } catch (error) {
+    const errorInfo = extractError(error);
+    throw new Error(errorInfo.message);
+  }
+}
+
 export async function match(roomId, file) {
-  const fd = new FormData();
-  fd.append('photo', file);
-  const res = await fetch(`${API_BASE}/match/${roomId}`, {
-    method: 'POST',
-    headers: { ...getAuthHeaders() },
-    body: fd
-  });
-  if (!res.ok) throw new Error((await res.json()).error || 'Match failed');
-  return res.json();
+  try {
+    const fd = new FormData();
+    fd.append('photo', file);
+    const res = await fetch(`${API_BASE}/match/${roomId}`, {
+      method: 'POST',
+      headers: { ...getAuthHeaders() },
+      body: fd
+    });
+    
+    if (!res.ok) {
+      const errorData = await res.json();
+      const errorInfo = extractError({ response: { data: errorData, status: res.status } });
+      throw new Error(errorInfo.message);
+    }
+    
+    const response = await res.json();
+    
+    // Handle new standardized response format: { success: true, data: {...} }
+    if (response.success && response.data) {
+      return response.data;
+    }
+    
+    // Handle old format for backward compatibility
+    return response;
+  } catch (error) {
+    if (error.message) {
+      throw error;
+    }
+    const errorInfo = extractError(error);
+    throw new Error(errorInfo.message);
+  }
 }
 
 
@@ -178,12 +216,26 @@ export async function roomDetails(roomId) {
   return res.json();
 }
 
-export async function roomPhotos(roomId) {
-  const res = await fetch(`${API_BASE}/uploads/room/${roomId}`, {
-    headers: { ...getAuthHeaders() }
-  });
-  if (!res.ok) throw new Error((await res.json()).error || 'Failed to fetch photos');
-  return res.json();
+export async function roomPhotos(roomId, page = 1, limit = 20) {
+  try {
+    const response = await apiGet(`/uploads/room/${roomId}`, {
+      params: { page, limit }
+    });
+    
+    // Handle paginated response: { success: true, data: [...], pagination: {...} }
+    if (response.success && response.data) {
+      return {
+        data: response.data,
+        pagination: response.pagination
+      };
+    }
+    
+    // Handle non-paginated response (backward compatibility)
+    return response.data || response;
+  } catch (error) {
+    const errorInfo = extractError(error);
+    throw new Error(errorInfo.message);
+  }
 }
 
 export async function updateUsername(username) {
