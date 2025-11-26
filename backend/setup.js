@@ -25,31 +25,36 @@ if (fs.existsSync(envPath)) {
   // Generate a secure JWT secret
   const jwtSecret = crypto.randomBytes(64).toString('hex');
   
+  // Generate Flask service secret
+  const flaskSecret = crypto.randomBytes(32).toString('base64');
+  
   const envContent = `# Backend Environment Configuration
 PORT=4000
 NODE_ENV=development
 
-# JWT Configuration (Generated secure secret)
-JWT_SECRET=${jwtSecret}
+# Database Configuration (REQUIRED)
+# For local MongoDB: mongodb://localhost:27017/facematch
+# For MongoDB Atlas: mongodb+srv://username:password@cluster.mongodb.net/facematch?retryWrites=true&w=majority
+MONGODB_URI=mongodb://localhost:27017/facematch
 
-# Upload Configuration
-UPLOAD_DIR=uploads
-DATA_DIR=data
+# JWT Configuration (Generated secure secret - 64 characters)
+JWT_SECRET=${jwtSecret}
 
 # Cloudinary Configuration (REQUIRED - Replace with your actual values)
 CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
 CLOUDINARY_API_KEY=your_cloudinary_api_key
 CLOUDINARY_API_SECRET=your_cloudinary_api_secret
 
-# Frontend URL
+# Flask Service Configuration (REQUIRED)
+FLASK_SERVICE_URL=http://localhost:5000
+FLASK_SERVICE_SECRET=${flaskSecret}
+
+# Frontend URL (REQUIRED for CORS)
 FRONTEND_URL=http://localhost:5173
 
-# Database Configuration (Optional - for future database migration)
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=facematch
-DB_USER=postgres
-DB_PASSWORD=password`;
+# Upload Configuration (Optional)
+UPLOAD_DIR=uploads
+DATA_DIR=data`;
 
   fs.writeFileSync(envPath, envContent);
   console.log('✅ .env file created with secure JWT secret');
@@ -60,27 +65,31 @@ const envExampleContent = `# Backend Environment Configuration
 PORT=4000
 NODE_ENV=development
 
-# JWT Configuration (REQUIRED - Change this to a secure secret)
-JWT_SECRET=your_super_secure_jwt_secret_key_here_change_this_in_production_123456789
+# Database Configuration (REQUIRED)
+# For local MongoDB: mongodb://localhost:27017/facematch
+# For MongoDB Atlas: mongodb+srv://username:password@cluster.mongodb.net/facematch?retryWrites=true&w=majority
+MONGODB_URI=mongodb://localhost:27017/facematch
 
-# Upload Configuration
-UPLOAD_DIR=uploads
-DATA_DIR=data
+# JWT Configuration (REQUIRED - must be at least 32 characters)
+# Generate with: openssl rand -base64 32
+JWT_SECRET=your_super_secure_jwt_secret_here_minimum_32_characters_long
 
 # Cloudinary Configuration (REQUIRED - Replace with your actual values)
 CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
 CLOUDINARY_API_KEY=your_cloudinary_api_key
 CLOUDINARY_API_SECRET=your_cloudinary_api_secret
 
-# Frontend URL
+# Flask Service Configuration (REQUIRED)
+FLASK_SERVICE_URL=http://localhost:5000
+# Generate with: openssl rand -base64 32 (must match Flask's FLASK_SERVICE_SECRET)
+FLASK_SERVICE_SECRET=your_shared_secret_between_backends
+
+# Frontend URL (REQUIRED for CORS)
 FRONTEND_URL=http://localhost:5173
 
-# Database Configuration (Optional - for future database migration)
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=facematch
-DB_USER=postgres
-DB_PASSWORD=password`;
+# Upload Configuration (Optional)
+UPLOAD_DIR=uploads
+DATA_DIR=data`;
 
 fs.writeFileSync(envExamplePath, envExampleContent);
 console.log('✅ .env.example file created');
