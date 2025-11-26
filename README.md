@@ -1,4 +1,4 @@
-# 🎯 FaceMatch - Event Photo Face Matching Platform
+#  FaceMatch - Event Photo Face Matching Platform
 
 [![Production Ready](https://img.shields.io/badge/Status-Production%20Ready-brightgreen.svg)](https://github.com/your-username/face-match)
 [![Security](https://img.shields.io/badge/Security-Enterprise%20Grade-blue.svg)](https://github.com/your-username/face-match)
@@ -6,29 +6,29 @@
 
 **FaceMatch** is a comprehensive event photo face matching platform that helps event organizers match attendee selfies against a collection of event photos using advanced AI-powered face recognition technology.
 
-## 🌟 Key Features
+##  Key Features
 
-### 🎯 Core Functionality
-- **🔐 User Authentication**: JWT-based secure authentication system
-- **📸 Photo Upload**: Cloudinary-integrated photo management with optimization
-- **🤖 Face Recognition**: Dual-system approach with V1 (face-recognition) and V2 (InsightFace + FAISS)
-- **🔍 Photo Matching**: High-accuracy face matching with 90-95% precision
-- **📱 Modern UI**: React-based responsive frontend with Tailwind CSS
-- **📅 Event-aware Rooms**: Each room stores an optional event date and tracks joined participants for organizer insights
-- **🗑️ Safe Deletion**: Deleting a room automatically removes Cloudinary assets, database entries, and FAISS indexes
-- **⚡ Real-time Processing**: Sub-50ms search with FAISS vector indexing
+###  Core Functionality
+- ** User Authentication**: JWT-based secure authentication system
+- ** Photo Upload**: Cloudinary-integrated photo management with optimization
+- ** Face Recognition**: Dual-system approach with V1 (face-recognition) and V2 (InsightFace + FAISS)
+- ** Photo Matching**: High-accuracy face matching with 90-95% precision
+- ** Modern UI**: React-based responsive frontend with Tailwind CSS
+- ** Event-aware Rooms**: Each room stores an optional event date and tracks joined participants for organizer insights
+- ** Safe Deletion**: Deleting a room automatically removes Cloudinary assets, database entries, and FAISS indexes
+- ** Real-time Processing**: Sub-50ms search with FAISS vector indexing
 
-### 🚀 Advanced Features
-- **🏢 Multi-tenant Architecture**: Event-based room management (organizers vs attendees)
-- **📊 Performance Monitoring**: Real-time metrics and health checks
-- **🛡️ Enterprise Security**: Rate limiting, input validation, security headers
-- **🔄 Background Processing**: Async photo ingestion and processing with retry + status tracking
-- **📦 Bulk Operations**: Bulk photo upload and processing
-- **💾 Smart Caching**: LRU cache with TTL for optimal performance
-- **👥 Participant Counts**: Every room response includes the number of members who have joined
-- **📈 Analytics**: Comprehensive request analytics and monitoring
+###  Advanced Features
+- ** Multi-tenant Architecture**: Event-based room management (organizers vs attendees)
+- ** Performance Monitoring**: Real-time metrics and health checks
+- ** Enterprise Security**: Rate limiting, input validation, security headers
+- ** Background Processing**: Async photo ingestion and processing with retry + status tracking
+- ** Bulk Operations**: Bulk photo upload and processing
+- ** Smart Caching**: LRU cache with TTL for optimal performance
+- ** Participant Counts**: Every room response includes the number of members who have joined
+- ** Analytics**: Comprehensive request analytics and monitoring
 
-## 🏗️ Architecture Overview
+##  Architecture Overview
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
@@ -94,7 +94,7 @@ face-match/
 └── 📄 README.md               # This file
 ```
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 
@@ -238,8 +238,6 @@ VITE_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
 VITE_FIREBASE_PROJECT_ID=your_project_id
 ```
 
-> **Note:** See [CLOUDINARY_SETUP.md](CLOUDINARY_SETUP.md) for detailed Cloudinary configuration help.
-
 ### 4. Start Services
 
 #### Start MongoDB
@@ -371,7 +369,7 @@ numba>=0.56.0
 }
 ```
 
-## 📚 API Documentation
+##  API Documentation
 
 ### Node.js Backend API
 
@@ -485,7 +483,7 @@ Content-Type: application/json
 }
 ```
 
-## 🛡️ Security Features
+##  Security Features
 
 ### Backend Security
 - **Rate Limiting**: 100 requests/15min (general), 5 requests/15min (auth)
@@ -501,7 +499,7 @@ Content-Type: application/json
 - **Security Headers**: XSS protection, content type options
 - **Request Logging**: Comprehensive request/response logging
 
-## 📊 Performance Features
+##  Performance Features
 
 ### Optimization Strategies
 - **Gzip Compression**: All responses compressed
@@ -517,7 +515,7 @@ Content-Type: application/json
 - **Request Analytics**: Per-route performance analytics
 - **Error Tracking**: Comprehensive error logging
 
-## 🎯 Usage Examples
+##  Usage Examples
 
 ### Creating an Event and Uploading Photos
 
@@ -535,7 +533,7 @@ Content-Type: application/json
 4. **Matching**: User selfies are matched against indexed faces
 5. **Results**: Ranked matches with confidence scores
 
-## 🔧 Development
+##  Development
 
 ### Running in Development Mode
 
@@ -570,7 +568,7 @@ cd backend && npm test
 cd frontend && npm test
 ```
 
-## 📈 Performance Benchmarks
+##  Performance Benchmarks
 
 ### Face Recognition Accuracy
 - **V1 System**: 85-90% accuracy with face-recognition library
@@ -590,37 +588,6 @@ cd frontend && npm test
 
 ## 🚀 Deployment
 
-**📖 For detailed deployment instructions, see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)**
-
-### 🆓 FREE Deployment (Recommended for Testing)
-
-**Deploy completely FREE using free tiers!**
-
-- Frontend → [Vercel](https://vercel.com) (free - unlimited)
-- Backend → [Render](https://render.com) (free tier)
-- Flask → Render (free tier)
-- MongoDB → [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) (free M0 cluster)
-
-**👉 See [FREE_DEPLOYMENT.md](FREE_DEPLOYMENT.md) for step-by-step FREE deployment guide!**
-
-**Quick Checklist**: [DEPLOY_FREE_QUICK.md](DEPLOY_FREE_QUICK.md)
-
-### 💰 Paid Deployment Options
-
-1. **Easiest (Recommended for beginners)**: 
-   - Frontend → [Vercel](https://vercel.com) (free)
-   - Backend → [Railway](https://railway.app) or [Render](https://render.com)
-   - Flask → Railway/Render (separate service)
-   - MongoDB → [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) (free tier)
-
-2. **Docker Deployment**:
-   ```bash
-   # Create .env file with all required variables
-   docker-compose up -d --build
-   ```
-
-3. **Full Server Deployment**: See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed instructions
-
 ### Production Deployment Checklist
 
 - [ ] Set production environment variables
@@ -631,13 +598,18 @@ cd frontend && npm test
 - [ ] Configure backup strategies
 - [ ] Set up CI/CD pipeline
 
-### Docker Files Included
+### Docker Deployment (Optional)
 
-This project includes Dockerfiles and docker-compose.yml for easy deployment:
-- `backend/Dockerfile` - Node.js backend
-- `flask-backend/Dockerfile` - Flask face recognition service
-- `frontend/Dockerfile` - React frontend with Nginx
-- `docker-compose.yml` - Complete stack orchestration
+```dockerfile
+# Example Dockerfile for backend
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY . .
+EXPOSE 4000
+CMD ["npm", "start"]
+```
 
 ## 🤝 Contributing
 
@@ -688,94 +660,3 @@ python bulk_ingest.py
 # Manual photo ingestion
 python manual_ingest.py
 ```
-
-## 🆘 Support & Troubleshooting
-
-### Common Issues
-
-**Q: MongoDB connection error?**
-A: 
-- Ensure MongoDB is running: `mongod` or check service status
-- Verify `MONGODB_URI` in `backend/.env` is correct
-- For MongoDB Atlas, check network access and credentials
-- Check MongoDB logs for connection issues
-
-**Q: Face recognition not working?**
-A: 
-- Ensure Flask service is running: `python run_advanced.py`
-- Check Flask health endpoint: http://localhost:5000/health
-- Verify Python dependencies are installed: `pip install -r requirements-advanced.txt`
-- Check Flask logs for errors
-- Ensure `FLASK_SERVICE_SECRET` matches in both backends
-
-**Q: Upload failures?**
-A: 
-- Check Cloudinary configuration in `backend/.env`
-- Verify Cloudinary credentials are correct
-- See [CLOUDINARY_SETUP.md](CLOUDINARY_SETUP.md) for detailed help
-- Check file size limits (default: 10MB)
-- Verify file format is supported (jpg, png, webp)
-
-**Q: "Invalid cloud_name" error?**
-A: See [CLOUDINARY_SETUP.md](CLOUDINARY_SETUP.md) for step-by-step setup guide.
-
-**Q: JWT authentication errors?**
-A: 
-- Ensure `JWT_SECRET` is at least 32 characters long
-- Verify token is being sent in Authorization header
-- Check token expiration
-- Clear browser localStorage and re-login
-
-**Q: Performance issues?**
-A: 
-- Monitor system resources (CPU, memory)
-- Consider GPU acceleration for Flask service (set `GPU_ENABLED=true`)
-- Check database indexes are created
-- Monitor API response times via health endpoint
-- Consider scaling services separately
-
-**Q: Flask service won't start?**
-A: 
-- Ensure Python 3.8+ is installed: `python --version`
-- Activate virtual environment: `source venv/bin/activate`
-- Install dependencies: `pip install -r requirements-advanced.txt`
-- Check for port conflicts (port 5000)
-- Review Flask logs for specific errors
-
-### Getting Help
-
-- 📧 Email: support@facematch.com
-- 💬 Discord: [Join our community](https://discord.gg/facematch)
-- 📖 Documentation: [Full docs](https://docs.facematch.com)
-- 🐛 Issues: [GitHub Issues](https://github.com/your-username/face-match/issues)
-
-## ✨ Recent Improvements
-
-This project has been enhanced with several improvements:
-
-- ✅ **Standardized Error Handling** - Consistent error responses with error codes
-- ✅ **Request Validation** - Joi-based validation for all endpoints
-- ✅ **Enhanced API Client** - Automatic retry, error handling, and progress tracking
-- ✅ **Optimistic Updates** - Better UX with immediate UI feedback
-- ✅ **Database Indexes** - Optimized queries for better performance
-- ✅ **Pagination Support** - Efficient handling of large photo collections
-- ✅ **Enhanced Health Checks** - Comprehensive service monitoring
-- ✅ **Configuration Management** - Centralized and validated configuration
-
-See [IMPROVEMENTS_IMPLEMENTED.md](IMPROVEMENTS_IMPLEMENTED.md) for complete details.
-
-## 🎉 Acknowledgments
-
-- **InsightFace** for advanced face recognition models
-- **FAISS** for efficient vector search
-- **Cloudinary** for image management
-- **React** and **Vite** for the frontend framework
-- **Express.js** for the backend API
-- **Flask** for the face recognition service
-- **MongoDB** for robust data storage
-
----
-
-**Made with ❤️ for event organizers and attendees worldwide**
-
-*FaceMatch - Connecting faces, creating memories* 🎯📸
