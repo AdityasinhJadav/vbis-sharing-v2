@@ -1,32 +1,28 @@
-import { apiPost, apiGet, apiPut, apiDelete, apiUpload } from './utils/apiClient';
-import { extractError } from './utils/errorHandler';
-
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000/api';
 
-// Legacy function for backward compatibility
 function getAuthHeaders() {
   const token = localStorage.getItem('token');
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export async function signup({ email, password, role, username }) {
-  try {
-    const response = await apiPost('/auth/signup', { email, password, role, username });
-    return response.data || response;
-  } catch (error) {
-    const errorInfo = extractError(error);
-    throw new Error(errorInfo.message);
-  }
+  const res = await fetch(`${API_BASE}/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, role, username })
+  });
+  if (!res.ok) throw new Error((await res.json()).error || 'Signup failed');
+  return res.json();
 }
 
 export async function login({ email, password }) {
-  try {
-    const response = await apiPost('/auth/login', { email, password });
-    return response.data || response;
-  } catch (error) {
-    const errorInfo = extractError(error);
-    throw new Error(errorInfo.message);
-  }
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  if (!res.ok) throw new Error((await res.json()).error || 'Login failed');
+  return res.json();
 }
 
 export async function verifyToken(token) {
@@ -40,23 +36,21 @@ export async function verifyToken(token) {
 }
 
 export async function createRoom(name, description, eventDate) {
-  try {
-    const response = await apiPost('/rooms', { name, description, eventDate });
-    return response.data || response;
-  } catch (error) {
-    const errorInfo = extractError(error);
-    throw new Error(errorInfo.message);
-  }
+  const res = await fetch(`${API_BASE}/rooms`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ name, description, eventDate })
+  });
+  if (!res.ok) throw new Error((await res.json()).error || 'Create room failed');
+  return res.json();
 }
 
 export async function myRooms() {
-  try {
-    const response = await apiGet('/rooms/mine');
-    return response.data || response;
-  } catch (error) {
-    const errorInfo = extractError(error);
-    throw new Error(errorInfo.message);
-  }
+  const res = await fetch(`${API_BASE}/rooms/mine`, {
+    headers: { ...getAuthHeaders() }
+  });
+  if (!res.ok) throw new Error((await res.json()).error || 'Fetch rooms failed');
+  return res.json();
 }
 
 export async function roomByKey(key) {
@@ -145,48 +139,17 @@ export async function uploadCandidate(roomId, file) {
   return res.json();
 }
 
-export async function deletePhoto(photoId) {
-  try {
-    const response = await apiDelete(`/uploads/${photoId}`);
-    return response.data || response;
-  } catch (error) {
-    const errorInfo = extractError(error);
-    throw new Error(errorInfo.message);
-  }
-}
-
 export async function match(roomId, file) {
-  try {
-    const fd = new FormData();
-    fd.append('photo', file);
-    const res = await fetch(`${API_BASE}/match/${roomId}`, {
-      method: 'POST',
-      headers: { ...getAuthHeaders() },
-      body: fd
-    });
-    
-    if (!res.ok) {
-      const errorData = await res.json();
-      const errorInfo = extractError({ response: { data: errorData, status: res.status } });
-      throw new Error(errorInfo.message);
-    }
-    
-    const response = await res.json();
-    
-    // Handle new standardized response format: { success: true, data: {...} }
-    if (response.success && response.data) {
-      return response.data;
-    }
-    
-    // Handle old format for backward compatibility
-    return response;
-  } catch (error) {
-    if (error.message) {
-      throw error;
-    }
-    const errorInfo = extractError(error);
-    throw new Error(errorInfo.message);
-  }
+  const fd = new FormData();
+  fd.append('photo', file);
+  const res = await fetch(`${API_BASE}/match/${roomId}`, {
+    method: 'POST',
+    headers: { ...getAuthHeaders() },
+    body: fd
+  });
+  const raw = await res.json();
+  if (!res.ok) throw new Error(raw.error || raw.message || 'Match failed');
+  return raw.data || raw;
 }
 
 
@@ -216,26 +179,25 @@ export async function roomDetails(roomId) {
   return res.json();
 }
 
-export async function roomPhotos(roomId, page = 1, limit = 20) {
-  try {
-    const response = await apiGet(`/uploads/room/${roomId}`, {
-      params: { page, limit }
-    });
-    
-    // Handle paginated response: { success: true, data: [...], pagination: {...} }
-    if (response.success && response.data) {
-      return {
-        data: response.data,
-        pagination: response.pagination
-      };
+export async function roomPhotos(roomId, { page = 1, limit = 100 } = {}) {
+  const params = new URLSearchParams();
+  if (page) params.append('page', page);
+  if (limit) params.append('limit', limit);
+
+  const query = params.toString();
+  const res = await fetch(
+    `${API_BASE}/uploads/room/${roomId}${query ? `?${query}` : ''}`,
+    {
+      headers: { ...getAuthHeaders() }
     }
-    
-    // Handle non-paginated response (backward compatibility)
-    return response.data || response;
-  } catch (error) {
-    const errorInfo = extractError(error);
-    throw new Error(errorInfo.message);
+  );
+
+  const raw = await res.json();
+  if (!res.ok) {
+    throw new Error(raw.error || raw.message || 'Failed to fetch photos');
   }
+
+  return normalizePhotoPagination(raw, page, limit);
 }
 
 export async function updateUsername(username) {
@@ -263,4 +225,99 @@ export async function getIngestionStatus(roomId) {
   });
   if (!res.ok) throw new Error((await res.json()).error || 'Failed to get ingestion status');
   return res.json();
+}
+
+function normalizePhotoPagination(payload, fallbackPage, fallbackLimit) {
+  const data = payload?.data ?? payload;
+
+  if (Array.isArray(data)) {
+    return {
+      items: data,
+      pagination: buildPaginationMeta(fallbackPage, fallbackLimit, data.length)
+    };
+  }
+
+  const innerItems =
+    Array.isArray(data?.items)
+      ? data.items
+      : Array.isArray(data?.photos)
+      ? data.photos
+      : Array.isArray(data?.data)
+      ? data.data
+      : Array.isArray(payload)
+      ? payload
+      : [];
+
+  const paginationSource = data?.pagination || payload?.pagination || {};
+  const pagination = {
+    page: numberOrDefault(paginationSource.page ?? data?.page, fallbackPage),
+    limit: numberOrDefault(paginationSource.limit ?? data?.limit, fallbackLimit),
+    totalPages: numberOrDefault(
+      paginationSource.totalPages ?? data?.totalPages,
+      null
+    ),
+    totalItems: numberOrDefault(
+      paginationSource.totalItems ?? data?.totalItems,
+      Array.isArray(innerItems) ? innerItems.length : 0
+    ),
+    hasNextPage: paginationSource.hasNextPage ?? data?.hasNextPage ?? null,
+    nextPage: numberOrDefault(
+      paginationSource.nextPage ?? data?.nextPage,
+      null
+    )
+  };
+
+  if (!pagination.totalPages && pagination.limit) {
+    pagination.totalPages = Math.max(
+      1,
+      Math.ceil((pagination.totalItems || 0) / pagination.limit)
+    );
+  }
+
+  if (pagination.hasNextPage === null && pagination.nextPage !== null) {
+    pagination.hasNextPage = pagination.nextPage > pagination.page;
+  }
+
+  if (pagination.hasNextPage === null && pagination.totalPages !== null) {
+    pagination.hasNextPage = pagination.page < pagination.totalPages;
+  }
+
+  return {
+    items: innerItems,
+    pagination: {
+      ...pagination,
+      hasNextPage:
+        pagination.hasNextPage ??
+        (pagination.totalPages
+          ? pagination.page < pagination.totalPages
+          : false),
+      nextPage:
+        pagination.nextPage ??
+        (pagination.totalPages && pagination.page < pagination.totalPages
+          ? pagination.page + 1
+          : null)
+    }
+  };
+}
+
+function buildPaginationMeta(page, limit, totalItems) {
+  const safeLimit = numberOrDefault(limit, totalItems || 1) || 1;
+  const total = numberOrDefault(totalItems, 0);
+  const totalPages = Math.max(1, Math.ceil(total / safeLimit || 1));
+  return {
+    page: numberOrDefault(page, 1),
+    limit: safeLimit,
+    totalItems: total,
+    totalPages,
+    hasNextPage: (numberOrDefault(page, 1)) < totalPages,
+    nextPage:
+      (numberOrDefault(page, 1)) < totalPages
+        ? numberOrDefault(page, 1) + 1
+        : null
+  };
+}
+
+function numberOrDefault(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }

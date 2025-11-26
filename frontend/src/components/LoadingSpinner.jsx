@@ -33,9 +33,6 @@ const LoadingSpinner = ({
     }
   };
 
-  // Only rotate for default spinner, not for other icon types
-  const shouldRotate = type === 'default';
-  
   return (
     <Motion.div
       initial={{ opacity: 0 }}
@@ -43,13 +40,19 @@ const LoadingSpinner = ({
       exit={{ opacity: 0 }}
       className="flex flex-col items-center justify-center p-8"
     >
-      <Motion.div
-        animate={shouldRotate ? { rotate: 360 } : {}}
-        transition={shouldRotate ? { duration: 1, repeat: Infinity, ease: "linear" } : {}}
-        className={`${getSizeClasses()} text-sky-400 mb-4`}
-      >
-        {getIcon()}
-      </Motion.div>
+      {type === 'default' ? (
+        <Motion.div
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+          className={`${getSizeClasses()} text-sky-400 mb-4`}
+        >
+          {getIcon()}
+        </Motion.div>
+      ) : (
+        <div className={`${getSizeClasses()} text-sky-400 mb-4`}>
+          {getIcon()}
+        </div>
+      )}
       
       <Motion.p
         initial={{ opacity: 0, y: 10 }}

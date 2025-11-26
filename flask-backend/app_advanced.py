@@ -8,38 +8,25 @@ from flask_cors import CORS
 import os
 from dotenv import load_dotenv
 import logging
-import time
 from face_recognition_advanced import advanced_face_service
 from insightface_faiss_service import insightface_faiss_service
 from security_middleware import (
     rate_limit, validate_file_upload, validate_json_input,
     log_request, error_handler, security_headers, require_service_secret
 )
-from exceptions import (
-    FaceRecognitionError, NoFaceDetectedError, ModelNotInitializedError,
-    InvalidImageError, EventNotFoundError, IngestionError, ERROR_CODES
-)
 
 # Load environment variables
 load_dotenv()
 
-# Configure logging first
+app = Flask(__name__)
+CORS(app)
+
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Optional import for system monitoring
-try:
-    import psutil
-    PSUTIL_AVAILABLE = True
-except ImportError:
-    PSUTIL_AVAILABLE = False
-    logger.warning("psutil not installed. System metrics will not be available in health check. Install with: pip install psutil")
-
-app = Flask(__name__)
-CORS(app)
 
 # Initialize advanced face recognition service
 face_service = advanced_face_service
@@ -58,89 +45,31 @@ if not insightface_faiss_service.initialized:
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Enhanced health check endpoint with comprehensive system status"""
+    """Health check endpoint with model verification"""
     status = {
         'status': 'ok',
         'message': 'FaceMatch Advanced Flask Backend is running!',
         'service': 'Advanced FaceMatch Backend',
         'version': '2.0.0',
-        'services': {}
+        'face_recognition_ready': face_service.initialized,
+        'model_type': 'deep_learning_cnn',
+        'accuracy_level': 'industrial_grade',
+        'insightface_ready': insightface_faiss_service.initialized
     }
     
-    overall_status = 'ok'
-    
-    # Check InsightFace service
-    insightface_status = {
-        'initialized': insightface_faiss_service.initialized,
-        'test': 'not_tested'
-    }
-    
+    # Test InsightFace model if initialized
     if insightface_faiss_service.initialized:
         try:
             import numpy as np
             test_img = np.zeros((100, 100, 3), dtype=np.uint8)
             _ = insightface_faiss_service.app.get(test_img)
-            insightface_status['test'] = 'passed'
-            insightface_status['model'] = 'buffalo_l'
-            insightface_status['embedding_dim'] = 512
+            status['insightface_test'] = 'passed'
         except Exception as e:
-            insightface_status['test'] = f'failed: {str(e)}'
-            insightface_status['error'] = str(e)
-            overall_status = 'degraded'
+            status['insightface_test'] = f'failed: {str(e)}'
+            status['status'] = 'degraded'
             logger.warning(f"InsightFace model test failed: {e}")
-    else:
-        overall_status = 'degraded'
-        insightface_status['error'] = 'Service not initialized'
     
-    status['services']['insightface'] = insightface_status
-    
-    # Check face recognition service (V1)
-    face_recognition_status = {
-        'initialized': face_service.initialized,
-        'model_type': 'deep_learning_cnn',
-        'accuracy_level': 'industrial_grade'
-    }
-    
-    if not face_service.initialized:
-        overall_status = 'degraded'
-        face_recognition_status['error'] = 'Service not initialized'
-    
-    status['services']['face_recognition'] = face_recognition_status
-    
-    # Check FAISS indices
-    faiss_status = {
-        'indices_count': len(insightface_faiss_service.event_indices),
-        'total_vectors': sum(
-            len(idx.get('ids', [])) 
-            for idx in insightface_faiss_service.event_indices.values()
-        ) if insightface_faiss_service.initialized else 0
-    }
-    status['services']['faiss'] = faiss_status
-    
-    # System resources (if psutil is available)
-    if PSUTIL_AVAILABLE:
-        try:
-            process = psutil.Process()
-            memory_info = process.memory_info()
-            status['system'] = {
-                'memory': {
-                    'used_mb': round(memory_info.rss / 1024 / 1024, 2),
-                    'percent': round(process.memory_percent(), 2)
-                },
-                'cpu_percent': round(process.cpu_percent(interval=0.1), 2)
-            }
-        except Exception as e:
-            logger.warning(f"Failed to get system metrics: {e}")
-            status['system'] = {'error': 'Unable to retrieve system metrics'}
-    else:
-        status['system'] = {'note': 'System metrics unavailable (psutil not installed)'}
-    
-    status['status'] = overall_status
-    
-    # Return appropriate status code
-    status_code = 200 if overall_status == 'ok' else 503
-    
-    return jsonify(status), status_code
+    return jsonify(status)
 
 @app.route('/api/face/analyze', methods=['POST'])
 @rate_limit(max_requests=20, window=60)
@@ -346,58 +275,33 @@ def v2_analyze():
     """Analyze user image and return ArcFace embedding for V2 matching."""
     try:
         if 'image' not in request.files:
-            raise InvalidImageError('Image file is required')
-        
+            return jsonify({'success': False, 'message': 'image file is required'}), 400
+
         file = request.files['image']
         if file.filename == '':
-            raise InvalidImageError('No image file selected')
-        
-        if not insightface_faiss_service.initialized:
-            raise ModelNotInitializedError('InsightFace service is not initialized')
-        
-        logger.info(f"Processing face analysis for file: {file.filename}")
-        start_time = time.time()
-        
+            return jsonify({'success': False, 'message': 'no image selected'}), 400
+
         embedding = insightface_faiss_service.get_face_embedding(file)
-        
-        elapsed_time = time.time() - start_time
-        logger.info(f"Face analysis completed in {elapsed_time:.2f}s")
-        
+
         if embedding is None:
-            logger.warning(f"No face detected in image: {file.filename}")
-            raise NoFaceDetectedError(
-                'No faces found in the image. Please ensure a clear, front-facing face with good lighting.'
-            )
-        
+            # Return 200 with explicit no-face info so frontend can handle gracefully
+            return jsonify({
+                'success': True,
+                'embedding': None,
+                'dimension': 0,
+                'message': 'No faces found in the image. Please ensure a clear, front-facing face with good lighting.'
+            })
+
         return jsonify({
             'success': True,
             'embedding': embedding.tolist(),
             'dimension': len(embedding),
             'message': 'ArcFace embedding extracted successfully'
         })
-    
-    except FaceRecognitionError as e:
-        logger.warning(f"Face recognition error: {e.message}", extra={'code': e.code})
-        return jsonify({
-            'success': False,
-            'error': {
-                'message': e.message,
-                'code': e.code,
-                'statusCode': e.status_code
-            },
-            'details': e.details
-        }), e.status_code
-    
+
     except Exception as e:
-        logger.error(f"v2 analyze error: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': {
-                'message': 'Internal error during analysis',
-                'code': ERROR_CODES['INTERNAL_ERROR'],
-                'statusCode': 500
-            }
-        }), 500
+        logger.error(f"v2 analyze error: {e}")
+        return jsonify({'success': False, 'message': 'Internal error during analysis'}), 500
 
 @app.route('/api/v2/ingest', methods=['POST'])
 @rate_limit(max_requests=30, window=60)  # Increased for bulk processing
@@ -416,49 +320,31 @@ def v2_ingest():
         embedding = data.get('embedding')
         
         logger.info(f"Ingesting photo {photo_id} for event {event_id}")
+        logger.info(f"Image URL: {image_url}")
         
         if not event_id or not photo_id:
-            raise InvalidImageError('event_id and photo_id are required')
+            logger.error("Missing required parameters: event_id and photo_id")
+            return jsonify({'success': False, 'message': 'event_id and photo_id are required'}), 400
         
         # Check if InsightFace service is initialized
         if not insightface_faiss_service.initialized:
-            raise ModelNotInitializedError('InsightFace service is not available')
+            logger.error("InsightFace service not initialized")
+            return jsonify({'success': False, 'message': 'InsightFace service not available'}), 500
         
         # Attempt ingestion
         ok, error_msg = insightface_faiss_service.ingest(event_id, photo_id, image_url=image_url, embedding=embedding)
         
         if ok:
             logger.info(f"✅ Successfully ingested photo {photo_id} for event {event_id}")
-            return jsonify({
-                'success': True,
-                'message': f'Photo {photo_id} ingested successfully'
-            })
+            return jsonify({'success': True, 'message': f'Photo {photo_id} ingested successfully'})
         else:
             error_message = error_msg or f'Failed to ingest photo {photo_id}'
-            raise IngestionError(error_message, details={'photo_id': photo_id, 'event_id': event_id})
-    
-    except FaceRecognitionError as e:
-        logger.warning(f"Ingestion error: {e.message}", extra={'code': e.code})
-        return jsonify({
-            'success': False,
-            'error': {
-                'message': e.message,
-                'code': e.code,
-                'statusCode': e.status_code
-            },
-            'details': e.details
-        }), e.status_code
-    
+            logger.warning(f"❌ Failed to ingest photo {photo_id} for event {event_id}: {error_message}")
+            return jsonify({'success': False, 'message': error_message})
+            
     except Exception as e:
-        logger.error(f"v2 ingest error: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': {
-                'message': 'Internal error during ingestion',
-                'code': ERROR_CODES['INTERNAL_ERROR'],
-                'statusCode': 500
-            }
-        }), 500
+        logger.error(f"v2 ingest error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 @app.route('/api/v2/match', methods=['POST'])
@@ -477,49 +363,13 @@ def v2_match():
         top_k = int(data.get('top_k', 50))  # Increased default to get more results
         # Default threshold 0.4 for better recall (catches more true matches)
         threshold = float(data.get('threshold', 0.4))
-        
         if not event_id or not isinstance(user_embedding, list):
-            raise InvalidImageError('event_id and user_embedding are required')
-        
-        if not insightface_faiss_service.initialized:
-            raise ModelNotInitializedError('InsightFace service is not initialized')
-        
-        # Check if event exists in index
-        if event_id not in insightface_faiss_service.event_indices:
-            raise EventNotFoundError(f'Event {event_id} not found in index')
-        
+            return jsonify({'success': False, 'message': 'event_id and user_embedding are required'}), 400
         matches = insightface_faiss_service.match(event_id, user_embedding, top_k=top_k, threshold=threshold)
-        
-        return jsonify({
-            'success': True,
-            'matches': matches,
-            'top_k': top_k,
-            'threshold_used': threshold,
-            'matches_count': len(matches)
-        })
-    
-    except FaceRecognitionError as e:
-        logger.warning(f"Match error: {e.message}", extra={'code': e.code})
-        return jsonify({
-            'success': False,
-            'error': {
-                'message': e.message,
-                'code': e.code,
-                'statusCode': e.status_code
-            },
-            'details': e.details
-        }), e.status_code
-    
+        return jsonify({'success': True, 'matches': matches, 'top_k': top_k, 'threshold_used': threshold})
     except Exception as e:
-        logger.error(f"v2 match error: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': {
-                'message': 'Internal error during matching',
-                'code': ERROR_CODES['INTERNAL_ERROR'],
-                'statusCode': 500
-            }
-        }), 500
+        logger.error(f"v2 match error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/v2/clear-event', methods=['POST'])
 @require_service_secret

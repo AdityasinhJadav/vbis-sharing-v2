@@ -11,9 +11,6 @@ const {
   logger
 } = require('../middleware/security');
 const flaskClient = require('../services/flaskClient');
-const { schemas, validateQuery } = require('../utils/validation');
-const { sendSuccess, sendAppError, sendPaginated, ErrorCodes } = require('../utils/response');
-const { AppError } = require('../utils/AppError');
 
 // Background processing function for face matching
 async function processPhotosInBackground(photosToProcess) {
@@ -205,48 +202,27 @@ router.post('/room/:roomId', requireAuth, requireRole('organizer'), (req, res, n
   }
 });
 
-// List photos in a room (organizer or joined attendee) with pagination
-router.get('/room/:roomId', requireAuth, validateQuery(schemas.photoQuery), async (req, res) => {
+// List photos in a room (organizer or joined attendee)
+router.get('/room/:roomId', requireAuth, async (req, res) => {
   try {
     const { roomId } = req.params;
-    const { page, limit, sortBy, sortOrder } = req.query;
-    
     const room = await Room.findOne({ id: roomId });
-    if (!room) {
-      throw new AppError('Room not found', 404, ErrorCodes.ROOM_NOT_FOUND);
-    }
+    if (!room) return res.status(404).json({ error: 'Room not found' });
 
     if (req.user.role === 'organizer') {
-      if (room.ownerId !== req.user.sub) {
-        throw new AppError('Forbidden', 403, ErrorCodes.FORBIDDEN);
-      }
+      if (room.ownerId !== req.user.sub) return res.status(403).json({ error: 'Forbidden' });
     } else {
       const user = await User.findOne({ id: req.user.sub }).populate('joinedRooms');
       const joined = user?.joinedRooms?.some(r => r.id === room.id || r._id.toString() === room._id.toString());
       if (!joined) {
-        throw new AppError('You have not joined this room', 403, ErrorCodes.FORBIDDEN);
+        return res.status(403).json({ error: 'You have not joined this room' });
       }
     }
 
-    const skip = (page - 1) * limit;
-    const sort = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
-    
-    const [photos, total] = await Promise.all([
-      Photo.find({ roomId })
-        .sort(sort)
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Photo.countDocuments({ roomId })
-    ]);
-
-    sendPaginated(res, photos, { page, limit, total });
+    const photos = await Photo.find({ roomId });
+    res.json(photos);
   } catch (error) {
-    if (error instanceof AppError) {
-      return sendAppError(res, error);
-    }
-    logger.error('Get photos error', { error: error.message });
-    sendAppError(res, new AppError('Failed to fetch photos', 500, ErrorCodes.INTERNAL_ERROR));
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -339,68 +315,6 @@ router.get('/room/:roomId/ingestion-status', requireAuth, requireRole('organizer
   } catch (error) {
     logger.error('Ingestion status route error', { error: error.message });
     res.status(500).json({ error: error.message });
-  }
-});
-
-// Delete a photo (organizer only)
-router.delete('/:photoId', requireAuth, requireRole('organizer'), async (req, res) => {
-  try {
-    const { photoId } = req.params;
-    
-    const photo = await Photo.findOne({ id: photoId });
-    if (!photo) {
-      throw new AppError('Photo not found', 404, ErrorCodes.NOT_FOUND);
-    }
-
-    // Verify the user owns the room
-    const room = await Room.findOne({ id: photo.roomId });
-    if (!room) {
-      throw new AppError('Room not found', 404, ErrorCodes.ROOM_NOT_FOUND);
-    }
-    
-    if (room.ownerId !== req.user.sub) {
-      throw new AppError('Forbidden', 403, ErrorCodes.FORBIDDEN);
-    }
-
-    // Delete from Cloudinary
-    if (photo.publicId) {
-      try {
-        const { cloudinary } = require('../config/cloudinary');
-        await cloudinary.uploader.destroy(photo.publicId);
-        logger.info('Photo deleted from Cloudinary', { photoId, publicId: photo.publicId });
-      } catch (cloudinaryError) {
-        logger.warn('Failed to delete photo from Cloudinary', {
-          photoId,
-          publicId: photo.publicId,
-          error: cloudinaryError.message
-        });
-        // Continue with database deletion even if Cloudinary deletion fails
-      }
-    }
-
-    // Note: Flask backend doesn't support per-photo deletion yet.
-    // The face embeddings for this photo will remain in the index but won't match
-    // since the photo is deleted from the database. This is acceptable for now.
-    // If needed, organizers can re-ingest all photos to rebuild the index.
-    if (photo.processed) {
-      logger.info('Photo deleted (face embeddings may remain in Flask index)', {
-        photoId,
-        roomId: photo.roomId
-      });
-    }
-
-    // Delete from database
-    await Photo.deleteOne({ id: photoId });
-    
-    logger.info('Photo deleted successfully', { photoId, roomId: photo.roomId });
-    
-    sendSuccess(res, { photoId }, 'Photo deleted successfully');
-  } catch (error) {
-    if (error instanceof AppError) {
-      return sendAppError(res, error);
-    }
-    logger.error('Delete photo error', { error: error.message });
-    sendAppError(res, new AppError('Failed to delete photo', 500, ErrorCodes.INTERNAL_ERROR));
   }
 });
 

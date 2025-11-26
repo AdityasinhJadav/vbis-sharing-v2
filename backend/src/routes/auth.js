@@ -12,18 +12,15 @@ const {
   signupLimiter,
   logger
 } = require('../middleware/security');
-const { sendSuccess, sendAppError, ErrorCodes } = require('../utils/response');
-const { AppError } = require('../utils/AppError');
-const { schemas, validate } = require('../utils/validation');
 
 const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
 // Enhanced signup with validation and logging
-router.post('/signup', signupLimiter, validate(schemas.signup), async (req, res) => {
+router.post('/signup', signupLimiter, signupValidation, validateRequest, async (req, res) => {
   try {
-    const { email, password, role, username } = req.body;
+    const { email, password, role } = req.body;
 
     logger.info('Signup attempt', { email, role, ip: req.ip });
 
@@ -31,15 +28,8 @@ router.post('/signup', signupLimiter, validate(schemas.signup), async (req, res)
     const exists = await User.findOne({ email: email.toLowerCase() });
 
     if (exists) {
-      throw new AppError('Email already registered', 409, ErrorCodes.EMAIL_ALREADY_EXISTS);
-    }
-
-    // Check username if provided
-    if (username) {
-      const usernameExists = await User.findOne({ username: username.trim() });
-      if (usernameExists) {
-        throw new AppError('Username already taken', 409, ErrorCodes.USERNAME_ALREADY_TAKEN);
-      }
+      logger.warn('Signup failed - email already exists', { email, ip: req.ip });
+      return res.status(409).json({ error: 'Email already registered' });
     }
 
     const passwordHash = await bcrypt.hash(password, 12); // Increased rounds for security
@@ -50,7 +40,7 @@ router.post('/signup', signupLimiter, validate(schemas.signup), async (req, res)
       passwordHash,
       role,
       lastLogin: null,
-      username: username?.trim() || null
+      username: req.body.username || null
     });
 
     const token = jwt.sign(
@@ -61,23 +51,20 @@ router.post('/signup', signupLimiter, validate(schemas.signup), async (req, res)
 
     logger.info('User registered successfully', { userId: user.id, email, role, username: user.username });
 
-    sendSuccess(res, {
+    res.json({
       token,
       user: { id: user.id, email, role, username: user.username },
       expiresIn: '7d'
-    }, 'User registered successfully');
+    });
 
   } catch (error) {
-    if (error instanceof AppError) {
-      return sendAppError(res, error);
-    }
     logger.error('Signup error', { error: error.message, email: req.body.email });
-    sendAppError(res, new AppError('Registration failed. Please try again.', 500, ErrorCodes.INTERNAL_ERROR));
+    res.status(500).json({ error: 'Registration failed. Please try again.' });
   }
 });
 
 // Enhanced login with validation and logging
-router.post('/login', authLimiter, validate(schemas.login), async (req, res) => {
+router.post('/login', authLimiter, authValidation, validateRequest, async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -87,14 +74,14 @@ router.post('/login', authLimiter, validate(schemas.login), async (req, res) => 
 
     if (!user) {
       logger.warn('Login failed - user not found', { email, ip: req.ip });
-      throw new AppError('Invalid credentials', 401, ErrorCodes.UNAUTHORIZED);
+      return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     const isValidPassword = await bcrypt.compare(password, user.passwordHash);
 
     if (!isValidPassword) {
       logger.warn('Login failed - invalid password', { email, ip: req.ip });
-      throw new AppError('Invalid credentials', 401, ErrorCodes.UNAUTHORIZED);
+      return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     // Update last login
@@ -109,18 +96,15 @@ router.post('/login', authLimiter, validate(schemas.login), async (req, res) => 
 
     logger.info('User logged in successfully', { userId: user.id, email, username: user.username });
 
-    sendSuccess(res, {
+    res.json({
       token,
       user: { id: user.id, email: user.email, role: user.role, username: user.username },
       expiresIn: '7d'
-    }, 'Login successful');
+    });
 
   } catch (error) {
-    if (error instanceof AppError) {
-      return sendAppError(res, error);
-    }
     logger.error('Login error', { error: error.message, email: req.body.email });
-    sendAppError(res, new AppError('Login failed. Please try again.', 500, ErrorCodes.INTERNAL_ERROR));
+    res.status(500).json({ error: 'Login failed. Please try again.' });
   }
 });
 
@@ -160,10 +144,22 @@ router.post('/verify', (req, res) => {
 });
 
 // Update username endpoint
-router.put('/username', requireAuth, validate(schemas.updateUsername), async (req, res) => {
+router.put('/username', requireAuth, async (req, res) => {
   try {
     const { username } = req.body;
     const userId = req.user.sub;
+
+    if (!username || username.trim().length < 3) {
+      return res.status(400).json({ error: 'Username must be at least 3 characters' });
+    }
+
+    if (username.length > 30) {
+      return res.status(400).json({ error: 'Username must be less than 30 characters' });
+    }
+
+    if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+      return res.status(400).json({ error: 'Username can only contain letters, numbers, underscores, and hyphens' });
+    }
 
     // Check if username is already taken
     const existingUser = await User.findOne({ 
@@ -172,12 +168,12 @@ router.put('/username', requireAuth, validate(schemas.updateUsername), async (re
     });
 
     if (existingUser) {
-      throw new AppError('Username already taken', 409, ErrorCodes.USERNAME_ALREADY_TAKEN);
+      return res.status(409).json({ error: 'Username already taken' });
     }
 
     const user = await User.findOne({ id: userId });
     if (!user) {
-      throw new AppError('User not found', 404, ErrorCodes.USER_NOT_FOUND);
+      return res.status(404).json({ error: 'User not found' });
     }
 
     user.username = username.trim();
@@ -192,17 +188,14 @@ router.put('/username', requireAuth, validate(schemas.updateUsername), async (re
 
     logger.info('Username updated', { userId, username: user.username });
 
-    sendSuccess(res, {
+    res.json({
       token,
       user: { id: user.id, email: user.email, role: user.role, username: user.username }
-    }, 'Username updated successfully');
+    });
 
   } catch (error) {
-    if (error instanceof AppError) {
-      return sendAppError(res, error);
-    }
     logger.error('Username update error', { error: error.message, userId: req.user?.sub });
-    sendAppError(res, new AppError('Failed to update username. Please try again.', 500, ErrorCodes.INTERNAL_ERROR));
+    res.status(500).json({ error: 'Failed to update username. Please try again.' });
   }
 });
 

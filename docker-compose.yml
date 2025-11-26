@@ -1,0 +1,114 @@
+version: '3.8'
+
+services:
+  # MongoDB (optional - you can use MongoDB Atlas instead)
+  # Uncomment if you want to run MongoDB locally
+  # mongodb:
+  #   image: mongo:6.0
+  #   container_name: facematch-mongodb
+  #   restart: unless-stopped
+  #   ports:
+  #     - "27017:27017"
+  #   volumes:
+  #     - mongodb_data:/data/db
+  #   environment:
+  #     - MONGO_INITDB_DATABASE=facematch
+  #   networks:
+  #     - facematch-network
+
+  # Node.js Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: facematch-backend
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongodb:27017/facematch}
+      - JWT_SECRET=${JWT_SECRET}
+      - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
+      - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
+      - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
+      - FLASK_SERVICE_URL=http://flask:5000
+      - FLASK_SERVICE_SECRET=${FLASK_SERVICE_SECRET}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:80}
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./backend/data:/app/data
+      - ./backend/logs:/app/logs
+    depends_on:
+      - flask
+    networks:
+      - facematch-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Flask Face Recognition Service
+  flask:
+    build:
+      context: ./flask-backend
+      dockerfile: Dockerfile
+    container_name: facematch-flask
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - FLASK_DEBUG=0
+      - PORT=5000
+      - HOST=0.0.0.0
+      - FLASK_SERVICE_SECRET=${FLASK_SERVICE_SECRET}
+      - MODEL_NAME=${MODEL_NAME:-buffalo_l}
+      - DET_SIZE=${DET_SIZE:-640,640}
+      - DEFAULT_THRESHOLD=${DEFAULT_THRESHOLD:-0.4}
+      - MAX_TOP_K=${MAX_TOP_K:-50}
+      - FAISS_INDEX_PATH=./faiss_store
+      - FAISS_AUTO_SAVE_INTERVAL=${FAISS_AUTO_SAVE_INTERVAL:-300}
+      - RATE_LIMIT_ANALYZE=${RATE_LIMIT_ANALYZE:-20}
+      - RATE_LIMIT_MATCH=${RATE_LIMIT_MATCH:-10}
+      - RATE_LIMIT_INGEST=${RATE_LIMIT_INGEST:-30}
+      - GPU_ENABLED=${GPU_ENABLED:-false}
+    volumes:
+      - flask_faiss_store:/app/faiss_store
+    networks:
+      - facematch-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE=${VITE_API_BASE:-http://localhost:4000/api}
+        - VITE_FLASK_API_URL=${VITE_FLASK_API_URL:-http://localhost:5000/api}
+    container_name: facematch-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - facematch-network
+
+networks:
+  facematch-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+  flask_faiss_store:
+

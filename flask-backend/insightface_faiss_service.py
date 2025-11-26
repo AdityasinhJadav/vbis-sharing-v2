@@ -51,16 +51,10 @@ class InsightFaceFaissService:
         # Thread locks for each event to ensure thread-safe FAISS operations
         self._locks: Dict[str, threading.Lock] = {}
 
-    def initialize(self, det_size: Tuple[int, int] = None) -> bool:
+    def initialize(self, det_size: Tuple[int, int] = (640, 640)) -> bool:
         if self.initialized:
             return True
         _try_imports()
-        
-        # Use smaller detection size for better performance on CPU
-        # 640x640 is default, but 512x512 is faster with minimal accuracy loss
-        if det_size is None:
-            det_size = (512, 512)  # Faster on CPU
-        
         providers = ["CPUExecutionProvider"]
         try:
             # Try GPU provider if available
@@ -68,8 +62,6 @@ class InsightFaceFaissService:
             available = [p for p in ort.get_available_providers()]
             if "CUDAExecutionProvider" in available:
                 providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-                # Use larger size for GPU
-                det_size = (640, 640)
         except Exception:
             pass
 
@@ -157,17 +149,6 @@ class InsightFaceFaissService:
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is None:
             return None
-        
-        # Resize large images for faster processing (max 1920px on longest side)
-        h, w = img.shape[:2]
-        max_dim = 1920
-        if max(h, w) > max_dim:
-            scale = max_dim / max(h, w)
-            new_w = int(w * scale)
-            new_h = int(h * scale)
-            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            logger.debug(f"Resized image from {w}x{h} to {new_w}x{new_h} for faster processing")
-        
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         return img
 
@@ -281,31 +262,12 @@ class InsightFaceFaissService:
             arr = np.frombuffer(data, dtype=np.uint8)
             img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if img_bgr is None:
-                logger.warning("Failed to decode image from uploaded file")
                 return None
-            
-            # Resize large images for faster processing (max 1920px on longest side)
-            # This significantly speeds up face detection without much accuracy loss
-            h, w = img_bgr.shape[:2]
-            max_dim = 1920
-            if max(h, w) > max_dim:
-                scale = max_dim / max(h, w)
-                new_w = int(w * scale)
-                new_h = int(h * scale)
-                img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
-                logger.debug(f"Resized image from {w}x{h} to {new_w}x{new_h} for faster processing")
-            
             img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
-            # Log image info for debugging
-            logger.debug(f"Processing image: shape={img.shape}, dtype={img.dtype}")
-            
             faces = self.app.get(img)
             if not faces:
-                logger.warning(f"No faces detected in image. Image shape: {img.shape}")
                 return None
-            
-            logger.debug(f"Detected {len(faces)} face(s) in image")
             
             # Filter faces by quality and select best
             quality_faces = []
@@ -319,30 +281,20 @@ class InsightFaceFaissService:
                     img_area = img.shape[0] * img.shape[1]
                     face_ratio = face_area / img_area if img_area > 0 else 0
                     
-                    # Filter: minimum detection score 0.3 (more lenient), face should be at least 0.05% of image
-                    # Lowered thresholds to catch more faces
-                    min_ratio = 0.0005  # Very lenient - 0.05% of image
-                    if det_score >= 0.3 and face_ratio >= min_ratio:
+                    # Filter: minimum detection score 0.4, face should be at least 0.1% of image (very lenient for group photos)
+                    # For high-confidence faces (score > 0.6), be even more lenient (0.1%)
+                    min_ratio = 0.001 if det_score > 0.6 else 0.0015
+                    if det_score >= 0.4 and face_ratio >= min_ratio:
                         quality_faces.append((f, det_score * face_ratio))
-                        logger.debug(f"Quality face: det_score={det_score:.3f}, face_ratio={face_ratio:.6f}, quality={det_score * face_ratio:.6f}")
                 else:
-                    # If no bbox, just use detection score
-                    if det_score >= 0.3:
+                    if det_score >= 0.4:
                         quality_faces.append((f, det_score))
-                        logger.debug(f"Quality face (no bbox): det_score={det_score:.3f}")
             
             if not quality_faces:
-                logger.warning(f"No quality faces found after filtering. Total faces detected: {len(faces)}")
-                # Log details about detected faces for debugging
-                for i, f in enumerate(faces):
-                    det_score = getattr(f, 'det_score', 0.0)
-                    bbox = getattr(f, 'bbox', None)
-                    logger.debug(f"Face {i}: det_score={det_score:.3f}, bbox={bbox}")
                 return None
             
             # Select best quality face
-            face, quality_score = max(quality_faces, key=lambda x: x[1])
-            logger.debug(f"Selected best face with quality score: {quality_score:.3f}")
+            face, _ = max(quality_faces, key=lambda x: x[1])
             
             emb = face.normed_embedding if hasattr(face, 'normed_embedding') else face.embedding
             vec = np.array(emb, dtype=np.float32)
@@ -351,10 +303,8 @@ class InsightFaceFaissService:
             vec = vec / norm
             # Additional L2 normalization for cosine similarity
             vec = vec / (np.linalg.norm(vec) + 1e-8)
-            logger.debug(f"Successfully extracted embedding: shape={vec.shape}, norm={np.linalg.norm(vec):.6f}")
             return vec
-        except Exception as e:
-            logger.error(f"Error in get_face_embedding: {e}", exc_info=True)
+        except Exception:
             return None
 
     def _get_lock(self, event_id: str) -> threading.Lock:

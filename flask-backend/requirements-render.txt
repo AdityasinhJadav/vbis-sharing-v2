@@ -1,0 +1,4 @@
+# Additional requirements for Render deployment
+# Add gunicorn for production WSGI server
+gunicorn>=20.1.0
+

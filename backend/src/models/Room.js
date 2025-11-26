@@ -32,14 +32,12 @@ const roomSchema = new mongoose.Schema({
     isActive: {
         type: Boolean,
         default: true
+    },
+    eventDate: {
+        type: Date
     }
 }, {
     timestamps: true
 });
-
-// Add indexes for better query performance
-roomSchema.index({ ownerId: 1 });
-roomSchema.index({ createdAt: -1 });
-roomSchema.index({ isActive: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Room', roomSchema);

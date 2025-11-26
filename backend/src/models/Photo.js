@@ -37,10 +37,4 @@ const photoSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Add indexes for better query performance
-photoSchema.index({ roomId: 1, processed: 1 });
-photoSchema.index({ uploaderId: 1 });
-photoSchema.index({ createdAt: -1 });
-photoSchema.index({ roomId: 1, createdAt: -1 });
-
 module.exports = mongoose.model('Photo', photoSchema);

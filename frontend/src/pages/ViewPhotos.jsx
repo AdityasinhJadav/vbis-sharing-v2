@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useContext, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useContext, useMemo, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FaArrowLeft, FaDownload, FaTimes, FaEye, FaSpinner, FaCamera, FaUpload, FaUser, FaImages, FaCheck, FaCheckSquare, FaSquare, FaSyncAlt, FaEdit, FaChevronLeft, FaChevronRight, FaInfoCircle, FaCalendarAlt } from 'react-icons/fa';
+import { FaArrowLeft, FaArrowRight, FaDownload, FaTimes, FaEye, FaSpinner, FaCamera, FaUpload, FaUser, FaImages, FaCheck, FaCheckSquare, FaSquare, FaRedo, FaUndo } from 'react-icons/fa';
 import { AuthContext } from '../auth/AuthContext';
 import { useToast } from '../components/ToastProvider';
 import { useTheme } from '../theme/ThemeContext';
-import { roomDetails, roomPhotos, match, retryPhotoIngestion, getIngestionStatus, deletePhoto } from '../api';
+import { roomDetails, roomPhotos, match, retryPhotoIngestion, getIngestionStatus } from '../api';
 import CameraCapture from '../components/CameraCapture';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { SkeletonPhotoGrid } from '../components/SkeletonLoader';
@@ -144,12 +144,16 @@ const JustifiedGallery = ({ photos, onSelect, onToggleSelect, selectedPhotos, is
   );
 };
 
+const PAGE_FETCH_SIZE = 100;
+
 const ViewPhotos = () => {
   const { roomId } = useParams();
   const navigate = useNavigate();
   const { currentUser } = useContext(AuthContext);
   const toast = useToast();
   const { isLight } = useTheme();
+  const isOrganizer = currentUser?.role === 'organizer';
+  const isAttendee = currentUser?.role === 'attendee';
 
   const [photos, setPhotos] = useState([]);
   const [filteredPhotos, setFilteredPhotos] = useState([]);
@@ -157,7 +161,7 @@ const ViewPhotos = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
-  const [photoIndex, setPhotoIndex] = useState(-1);
+  const [selectedPhotoIndex, setSelectedPhotoIndex] = useState(-1);
   const [roomInfo, setRoomInfo] = useState(null);
   const [activeTab, setActiveTab] = useState('all'); // 'all' or 'yours'
   const [showCameraCapture, setShowCameraCapture] = useState(false);
@@ -167,109 +171,135 @@ const ViewPhotos = () => {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [ingestionStatus, setIngestionStatus] = useState(null);
   const [retryingIngestion, setRetryingIngestion] = useState(false);
-  const [deletingPhoto, setDeletingPhoto] = useState(null);
+  const [uploadContext, setUploadContext] = useState('match'); // 'match' | 'change'
+
+  const normalizePhoto = useCallback((photo) => {
+    if (!photo) return null;
+    const normalizedId =
+      photo.id ||
+      photo._id ||
+      photo.photoId ||
+      photo.public_id ||
+      photo.cloudinaryPublicId ||
+      photo.url;
+
+    return {
+      ...photo,
+      id: normalizedId,
+      url: photo.url || photo.secure_url || photo.cloudinaryPublicId || '',
+      uploadedAt:
+        photo.uploadedAt ||
+        photo.createdAt ||
+        photo.updatedAt ||
+        photo.timestamp ||
+        null
+    };
+  }, []);
+
+  const shouldFetchNextPage = useCallback((pagination, currentPage, lastBatchCount) => {
+    if (!pagination) {
+      return lastBatchCount > 0 && lastBatchCount >= PAGE_FETCH_SIZE;
+    }
+
+    if (typeof pagination.hasNextPage === 'boolean') {
+      return pagination.hasNextPage;
+    }
+
+    if (typeof pagination.nextPage === 'number') {
+      return pagination.nextPage > currentPage;
+    }
+
+    if (typeof pagination.totalPages === 'number') {
+      return currentPage < pagination.totalPages;
+    }
+
+    if (typeof pagination.totalItems === 'number') {
+      const limit = Number(pagination.limit) || PAGE_FETCH_SIZE;
+      return currentPage * limit < pagination.totalItems;
+    }
+
+    const limitFallback = Number(pagination.limit) || PAGE_FETCH_SIZE;
+    return lastBatchCount > 0 && lastBatchCount >= limitFallback;
+  }, [PAGE_FETCH_SIZE]);
+
+  const fetchAllRoomPhotos = useCallback(async () => {
+    let page = 1;
+    let keepFetching = true;
+    const aggregated = [];
+    const seenIds = new Set();
+
+    while (keepFetching) {
+      const { items, pagination } = await roomPhotos(roomId, { page, limit: PAGE_FETCH_SIZE });
+      const normalizedBatch = (items || [])
+        .map(normalizePhoto)
+        .filter(Boolean)
+        .filter((photo) => {
+          if (!photo.id || seenIds.has(photo.id)) {
+            return false;
+          }
+          seenIds.add(photo.id);
+          return true;
+        });
+
+      aggregated.push(...normalizedBatch);
+      keepFetching = shouldFetchNextPage(pagination, page, normalizedBatch.length);
+      page += 1;
+
+      if (!keepFetching) {
+        break;
+      }
+    }
+
+    return aggregated.sort((a, b) => {
+      const aTime = a.uploadedAt ? new Date(a.uploadedAt).getTime() : 0;
+      const bTime = b.uploadedAt ? new Date(b.uploadedAt).getTime() : 0;
+      return bTime - aTime;
+    });
+  }, [PAGE_FETCH_SIZE, roomId, normalizePhoto, shouldFetchNextPage]);
 
   // Fetch room info and photos
   useEffect(() => {
     if (!roomId || !currentUser) return;
+    let isMounted = true;
 
     const loadData = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        // Fetch room details
-        const room = await roomDetails(roomId);
-        setRoomInfo(room);
+        const [room, photosList] = await Promise.all([
+          roomDetails(roomId),
+          fetchAllRoomPhotos()
+        ]);
 
-        // Fetch all photos (fetch all pages)
-        let allPhotos = [];
-        let currentPage = 1;
-        let hasMore = true;
-        const pageLimit = 100; // Fetch 100 photos per page to minimize requests
-        
-        while (hasMore) {
-          const response = await roomPhotos(roomId, currentPage, pageLimit);
-          
-          // Handle both paginated and non-paginated responses
-          if (response.data && Array.isArray(response.data)) {
-            // Paginated response
-            allPhotos = [...allPhotos, ...response.data];
-            hasMore = response.pagination?.hasNext || false;
-            currentPage++;
-          } else if (Array.isArray(response)) {
-            // Non-paginated response (backward compatibility)
-            allPhotos = response;
-            hasMore = false;
-          } else {
-            // Unexpected format
-            hasMore = false;
-          }
-          
-          // Safety check to prevent infinite loop
-          if (currentPage > 100) {
-            console.warn('Reached maximum page limit while fetching photos');
-            break;
-          }
-        }
-        
-        // Sort by uploadedAt if available, otherwise by id
-        allPhotos.sort((a, b) => {
-          const aTime = a.uploadedAt ? new Date(a.uploadedAt).getTime() : 0;
-          const bTime = b.uploadedAt ? new Date(b.uploadedAt).getTime() : 0;
-          return bTime - aTime; // Descending order (newest first)
-        });
-        setPhotos(allPhotos);
-        setFilteredPhotos(allPhotos);
+        if (!isMounted) return;
+
+        setRoomInfo(room);
+        setPhotos(photosList);
+        setFilteredPhotos(photosList);
       } catch (err) {
+        if (!isMounted) return;
         console.error('Error loading room data:', err);
         setError(err.message || 'Failed to load room. Please check your permissions.');
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     };
 
     loadData();
-  }, [roomId, currentUser]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [roomId, currentUser, fetchAllRoomPhotos]);
 
   // Filter photos based on active tab
   useEffect(() => {
     const currentPhotos = activeTab === 'yours' ? userMatchedPhotos : photos;
     setFilteredPhotos(currentPhotos);
   }, [photos, userMatchedPhotos, activeTab]);
-
-  // Keyboard navigation for photo modal
-  useEffect(() => {
-    if (!selectedPhoto) return;
-
-    const handleKeyDown = (e) => {
-      // Don't handle if user is typing in an input
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
-      if (e.key === 'Escape') {
-        setSelectedPhoto(null);
-        setPhotoIndex(-1);
-      } else if (e.key === 'ArrowLeft' && photoIndex > 0) {
-        e.preventDefault();
-        const prevPhoto = filteredPhotos[photoIndex - 1];
-        const newIndex = photoIndex - 1;
-        setPhotoIndex(newIndex);
-        setSelectedPhoto(prevPhoto);
-      } else if (e.key === 'ArrowRight' && photoIndex < filteredPhotos.length - 1) {
-        e.preventDefault();
-        const nextPhoto = filteredPhotos[photoIndex + 1];
-        const newIndex = photoIndex + 1;
-        setPhotoIndex(newIndex);
-        setSelectedPhoto(nextPhoto);
-      } else if ((e.key === 'd' || e.key === 'D') && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault();
-        downloadPhoto(selectedPhoto);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedPhoto, photoIndex, filteredPhotos]);
 
   // Load ingestion status (for organizers)
   useEffect(() => {
@@ -339,37 +369,27 @@ const ViewPhotos = () => {
       console.log('Starting face matching with', photos.length, 'photos');
       
       const result = await match(roomId, processedFile);
-      
-      // match() function already extracts data, so result should be { matches: [...], threshold: ... }
       const matches = result.matches || [];
-      const threshold = result.threshold;
-      const message = result.message;
       
       console.log('Face matching results:', {
         matchesCount: matches.length,
         totalPhotos: photos.length,
-        threshold: threshold,
-        message: message,
-        rawMatches: matches,
-        fullResult: result
+        threshold: result.threshold,
+        message: result.message,
+        rawMatches: matches
       });
       
       // Show helpful message if no matches but photos exist
-      if (matches.length === 0 && photos.length > 0 && message) {
-        toast.info(message);
+      if (matches.length === 0 && photos.length > 0 && result.message) {
+        toast.info(result.message);
       }
       
       // Map matches to photo objects
       const photoMap = new Map(photos.map(p => [p.id, p]));
       const matchedPhotos = matches
         .map(match => {
-          // Handle both old format (match.id) and new format (match.photo.id)
-          const matchId = match.id || match.photo?.id;
-          const photo = photoMap.get(matchId);
-          if (!photo) {
-            console.warn('Photo not found for match:', match);
-            return null;
-          }
+          const photo = photoMap.get(match.id || match.photo?.id);
+          if (!photo) return null;
           // Use confidence if available (new improved algorithm), otherwise use score
           const confidence = match.confidence !== undefined ? match.confidence : match.score;
           return {
@@ -399,7 +419,7 @@ const ViewPhotos = () => {
       let errorMessage = 'Face matching failed - please try a different photo';
       
       if (error.message && error.message.includes('No faces detected')) {
-        errorMessage = 'No face detected in your photo. Please try:\n• A clearer, front-facing photo\n• Better lighting\n• A different angle';
+        errorMessage = 'No face detected in your photo. Please try a clearer, front-facing photo with better lighting.';
       } else if (error.message && error.message.includes('Invalid image format')) {
         errorMessage = 'Invalid image format. Please upload a JPG or PNG file.';
       } else if (error.message) {
@@ -418,102 +438,17 @@ const ViewPhotos = () => {
     handleFaceMatching(imageFile);
   };
 
+  const openUploadModal = (context = 'match') => {
+    setUploadContext(context);
+    setShowUploadModal(true);
+  };
+
   // File upload handler
   const handleFileUpload = (event) => {
     const file = event.target.files[0];
     if (file) {
       handleFaceMatching(file);
       setShowUploadModal(false);
-    }
-  };
-
-  const handleDeletePhoto = async (photo) => {
-    if (!currentUser || currentUser.role !== 'organizer') {
-      toast.error('Only organizers can delete photos');
-      return;
-    }
-
-    if (!window.confirm(`Are you sure you want to delete this photo? This action cannot be undone.`)) {
-      return;
-    }
-
-    setDeletingPhoto(photo.id);
-    try {
-      await deletePhoto(photo.id);
-      
-      // Remove photo from state
-      setPhotos(prev => prev.filter(p => p.id !== photo.id));
-      setFilteredPhotos(prev => prev.filter(p => p.id !== photo.id));
-      setUserMatchedPhotos(prev => prev.filter(p => p.id !== photo.id));
-      
-      // Close modal if this photo was selected
-      if (selectedPhoto && selectedPhoto.id === photo.id) {
-        setSelectedPhoto(null);
-      }
-      
-      // Remove from selection if selected
-      setSelectedPhotos(prev => prev.filter(p => p.id !== photo.id));
-      
-      toast.success('Photo deleted successfully');
-    } catch (error) {
-      console.error('Delete photo error:', error);
-      toast.error(error.message || 'Failed to delete photo');
-    } finally {
-      setDeletingPhoto(null);
-    }
-  };
-
-  const handleBulkDelete = async () => {
-    if (!currentUser || currentUser.role !== 'organizer') {
-      toast.error('Only organizers can delete photos');
-      return;
-    }
-
-    if (selectedPhotos.length === 0) {
-      toast.warning('No photos selected');
-      return;
-    }
-
-    if (!window.confirm(`Are you sure you want to delete ${selectedPhotos.length} photo(s)? This action cannot be undone.`)) {
-      return;
-    }
-
-    const photosToDelete = [...selectedPhotos];
-    setDeletingPhoto('bulk');
-    
-    try {
-      let successCount = 0;
-      let errorCount = 0;
-
-      for (const photoId of photosToDelete) {
-        try {
-          await deletePhoto(photoId);
-          successCount++;
-          
-          // Remove from state
-          setPhotos(prev => prev.filter(p => p.id !== photoId));
-          setFilteredPhotos(prev => prev.filter(p => p.id !== photoId));
-          setUserMatchedPhotos(prev => prev.filter(p => p.id !== photoId));
-        } catch (error) {
-          console.error(`Failed to delete photo ${photoId}:`, error);
-          errorCount++;
-        }
-      }
-
-      if (successCount > 0) {
-        toast.success(`Deleted ${successCount} photo${successCount !== 1 ? 's' : ''} successfully`);
-      }
-      if (errorCount > 0) {
-        toast.warning(`Failed to delete ${errorCount} photo${errorCount !== 1 ? 's' : ''}`);
-      }
-
-      clearSelection();
-      setIsSelectionMode(false);
-    } catch (error) {
-      console.error('Bulk delete error:', error);
-      toast.error('Failed to delete photos');
-    } finally {
-      setDeletingPhoto(null);
     }
   };
 
@@ -592,6 +527,71 @@ const ViewPhotos = () => {
     setSelectedPhotos([]);
   };
 
+  const resetUserMatches = () => {
+    setUserMatchedPhotos([]);
+    setActiveTab('all');
+    setSelectedPhotos([]);
+    setIsSelectionMode(false);
+    toast.info('Matches cleared. Upload a new photo to refresh results.');
+  };
+
+  const openPhotoModal = (photo) => {
+    if (!photo) return;
+    const index = filteredPhotos.findIndex(p => p.id === photo.id);
+    setSelectedPhoto(photo);
+    setSelectedPhotoIndex(index >= 0 ? index : 0);
+  };
+
+  const closePhotoModal = () => {
+    setSelectedPhoto(null);
+    setSelectedPhotoIndex(-1);
+  };
+
+  const navigatePhoto = (direction) => {
+    if (selectedPhotoIndex === -1) return;
+    const nextIndex = selectedPhotoIndex + direction;
+    if (nextIndex < 0 || nextIndex >= filteredPhotos.length) return;
+    const nextPhoto = filteredPhotos[nextIndex];
+    if (nextPhoto) {
+      setSelectedPhoto(nextPhoto);
+      setSelectedPhotoIndex(nextIndex);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedPhotoIndex === -1) return;
+    const updatedPhoto = filteredPhotos[selectedPhotoIndex];
+    if (!updatedPhoto) {
+      setSelectedPhoto(null);
+      setSelectedPhotoIndex(-1);
+    } else {
+      setSelectedPhoto(updatedPhoto);
+    }
+  }, [filteredPhotos, selectedPhotoIndex]);
+
+  useEffect(() => {
+    if (!selectedPhoto) return;
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closePhotoModal();
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        navigatePhoto(1);
+      } else if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        navigatePhoto(-1);
+      } else if ((event.key === 'd' || event.key === 'D') && selectedPhoto) {
+        event.preventDefault();
+        downloadPhoto(selectedPhoto);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedPhoto, selectedPhotoIndex]);
+
   const downloadSelectedPhotos = async () => {
     if (selectedPhotos.length === 0) {
       toast.warning('No photos selected');
@@ -653,6 +653,8 @@ const ViewPhotos = () => {
       toast.error('Failed to download photos');
     }
   };
+
+  const isChangePhotoFlow = uploadContext === 'change';
 
   if (loading) {
     return (
@@ -779,33 +781,15 @@ const ViewPhotos = () => {
                       Clear
                     </motion.button>
                     {selectedPhotos.length > 0 && (
-                      <>
-                        <motion.button
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
-                          onClick={downloadSelectedPhotos}
-                          className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
-                        >
-                          <FaDownload className="h-4 w-4" />
-                          Download ({selectedPhotos.length})
-                        </motion.button>
-                        {currentUser?.role === 'organizer' && (
-                          <motion.button
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                            onClick={handleBulkDelete}
-                            disabled={deletingPhoto === 'bulk'}
-                            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-800 text-white rounded-lg transition-colors"
-                          >
-                            {deletingPhoto === 'bulk' ? (
-                              <FaSpinner className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <FaTimes className="h-4 w-4" />
-                            )}
-                            Delete ({selectedPhotos.length})
-                          </motion.button>
-                        )}
-                      </>
+                      <motion.button
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={downloadSelectedPhotos}
+                        className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+                      >
+                        <FaDownload className="h-4 w-4" />
+                        Download ({selectedPhotos.length})
+                      </motion.button>
                     )}
                     <motion.button
                       whileHover={{ scale: 1.05 }}
@@ -830,7 +814,7 @@ const ViewPhotos = () => {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
-          className="flex items-center justify-between gap-4 mb-6"
+          className="flex flex-wrap items-center justify-between gap-4 mb-6"
         >
           <div className="flex bg-slate-800 rounded-xl p-1 border border-slate-700">
             <button
@@ -856,50 +840,21 @@ const ViewPhotos = () => {
               Your Photos ({userMatchedPhotos.length})
             </button>
           </div>
-          
-          {/* Change Photo button - show when viewing "Your Photos" tab and have matched photos */}
-          {activeTab === 'yours' && userMatchedPhotos.length > 0 && (
-            <motion.button
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={() => {
-                // Show upload modal to change photo
-                setShowUploadModal(true);
-              }}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors border border-emerald-500 shadow-lg"
-              title="Upload a new photo to get updated matches"
-            >
-              <FaSyncAlt className="h-4 w-4" />
-              Change Photo
-            </motion.button>
-          )}
-          
-          {/* Show upload/camera buttons when no matches but photos exist */}
-          {activeTab === 'yours' && userMatchedPhotos.length === 0 && photos.length > 0 && (
-            <div className="flex gap-2">
+          <div className="flex flex-wrap gap-3">
+            {activeTab === 'yours' && userMatchedPhotos.length > 0 && (
               <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => setShowCameraCapture(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors"
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={() => openUploadModal('change')}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors"
               >
-                <FaCamera className="h-4 w-4" />
-                Take Selfie
+                <FaRedo className="h-4 w-4" />
+                Change Photo
               </motion.button>
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => setShowUploadModal(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
-              >
-                <FaUpload className="h-4 w-4" />
-                Upload Photo
-              </motion.button>
-            </div>
-          )}
+            )}
+          </div>
         </motion.div>
+
       </div>
 
       {/* Photos Grid - full width */}
@@ -922,15 +877,22 @@ const ViewPhotos = () => {
             animate={{ opacity: 1 }}
             className="text-center py-16"
           >
-            {activeTab === 'all' ? (
-              <>
-                <div className="text-slate-500 text-6xl mb-4">📷</div>
-                <h3 className="text-xl font-semibold text-white mb-2">No photos yet</h3>
-                <p className="text-slate-400 mb-4">Photos uploaded to this event will appear here</p>
-              </>
-            ) : (
-              // For "Your Photos" tab, just show a simple message since buttons are at top
-              <p className="text-slate-400">Use the buttons above to upload a photo and find matches</p>
+            <h3 className="text-xl font-semibold text-white mb-2">
+              No photos yet
+            </h3>
+            <p className="text-slate-400 mb-4">
+              Photos uploaded to this event will appear here
+            </p>
+            {activeTab === 'yours' && userMatchedPhotos.length === 0 && photos.length > 0 && (
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => openUploadModal('match')}
+                className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors mx-auto"
+              >
+                <FaUpload className="h-5 w-5" />
+                Upload Photo
+              </motion.button>
             )}
           </motion.div>
         ) : (
@@ -941,7 +903,7 @@ const ViewPhotos = () => {
           >
             <JustifiedGallery
               photos={filteredPhotos}
-              onSelect={(p) => setSelectedPhoto(p)}
+              onSelect={(p) => openPhotoModal(p)}
               onToggleSelect={togglePhotoSelection}
               selectedPhotos={selectedPhotos}
               isSelectionMode={isSelectionMode}
@@ -957,138 +919,61 @@ const ViewPhotos = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-sm p-4"
-            onClick={() => {
-              setSelectedPhoto(null);
-              setPhotoIndex(-1);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                setSelectedPhoto(null);
-                setPhotoIndex(-1);
-              } else if (e.key === 'ArrowLeft' && photoIndex > 0) {
-                const prevPhoto = filteredPhotos[photoIndex - 1];
-                setPhotoIndex(photoIndex - 1);
-                setSelectedPhoto(prevPhoto);
-              } else if (e.key === 'ArrowRight' && photoIndex < filteredPhotos.length - 1) {
-                const nextPhoto = filteredPhotos[photoIndex + 1];
-                setPhotoIndex(photoIndex + 1);
-                setSelectedPhoto(nextPhoto);
-              }
-            }}
-            tabIndex={0}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
+            onClick={closePhotoModal}
           >
             <motion.div
-              initial={{ scale: 0.95, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="relative w-full h-full max-w-7xl max-h-[95vh] flex flex-col"
+              initial={{ scale: 0.98, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.98, opacity: 0 }}
+              className="relative w-full h-full flex items-center justify-center"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Top Bar - Controls Only */}
-              <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-end p-4 bg-gradient-to-b from-black/80 to-transparent">
-                {/* Action Buttons */}
-                <div className="flex items-center gap-2">
-                  <motion.button
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
-                    onClick={() => downloadPhoto(selectedPhoto)}
-                    className="p-3 rounded-xl bg-white/10 hover:bg-white/20 backdrop-blur-sm border border-white/20 text-white transition-all"
-                    title="Download photo (D)"
-                  >
-                    <FaDownload className="h-5 w-5" />
-                  </motion.button>
-                  <motion.button
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
-                    onClick={() => {
-                      setSelectedPhoto(null);
-                      setPhotoIndex(-1);
-                    }}
-                    className="p-3 rounded-xl bg-white/10 hover:bg-white/20 backdrop-blur-sm border border-white/20 text-white transition-all"
-                    title="Close (ESC)"
-                  >
-                    <FaTimes className="h-5 w-5" />
-                  </motion.button>
-                </div>
-              </div>
+              {/* Download */}
+              <button
+                onClick={() => downloadPhoto(selectedPhoto)}
+                className="absolute top-6 right-20 px-6 py-4 bg-sky-500 hover:bg-sky-400 text-white font-semibold transition-colors flex items-center gap-2 shadow-lg"
+              >
+                <FaDownload className="h-5 w-5" />
+                Download
+              </button>
 
-              {/* Main Image Container */}
-              <div className="flex-1 flex items-center justify-center relative overflow-hidden">
-                {/* Navigation Arrows */}
-                {filteredPhotos.length > 1 && (
-                  <>
-                    {photoIndex > 0 && (
-                      <motion.button
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        whileHover={{ scale: 1.1, x: 5 }}
-                        whileTap={{ scale: 0.9 }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const prevPhoto = filteredPhotos[photoIndex - 1];
-                          setPhotoIndex(photoIndex - 1);
-                          setSelectedPhoto(prevPhoto);
-                        }}
-                        className="absolute left-4 z-20 p-4 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-sm border border-white/20 text-white transition-all"
-                        title="Previous photo (←)"
-                      >
-                        <FaChevronLeft className="h-6 w-6" />
-                      </motion.button>
-                    )}
-                    {photoIndex < filteredPhotos.length - 1 && (
-                      <motion.button
-                        initial={{ opacity: 0, x: 20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        whileHover={{ scale: 1.1, x: -5 }}
-                        whileTap={{ scale: 0.9 }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const nextPhoto = filteredPhotos[photoIndex + 1];
-                          setPhotoIndex(photoIndex + 1);
-                          setSelectedPhoto(nextPhoto);
-                        }}
-                        className="absolute right-4 z-20 p-4 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-sm border border-white/20 text-white transition-all"
-                        title="Next photo (→)"
-                      >
-                        <FaChevronRight className="h-6 w-6" />
-                      </motion.button>
-                    )}
-                  </>
-                )}
+              {/* Close button */}
+              <button
+                onClick={closePhotoModal}
+                className="absolute top-6 right-6 p-4 bg-white/10 text-white hover:bg-white/20 transition-colors"
+                aria-label="Close viewer"
+              >
+                <FaTimes className="h-6 w-6" />
+              </button>
 
-                {/* Image */}
-                <motion.img
-                  key={selectedPhoto.id}
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ duration: 0.2 }}
-                  src={selectedPhoto.url || selectedPhoto.cloudinaryPublicId || ''}
-                  alt={selectedPhoto.originalName || 'Photo'}
-                  className="max-w-full max-h-[85vh] w-auto h-auto object-contain rounded-lg shadow-2xl"
-                  style={{ maxWidth: 'min(90vw, 1400px)', maxHeight: '85vh' }}
-                />
-              </div>
+              {/* Previous */}
+              {selectedPhotoIndex > 0 && (
+                <button
+                  onClick={() => navigatePhoto(-1)}
+                  className="absolute left-8 p-5 bg-white/10 text-white hover:bg-white/20 transition-colors"
+                  aria-label="Previous photo"
+                >
+                  <FaArrowLeft className="h-6 w-6" />
+                </button>
+              )}
+              {/* Next */}
+              {selectedPhotoIndex < filteredPhotos.length - 1 && (
+                <button
+                  onClick={() => navigatePhoto(1)}
+                  className="absolute right-8 p-5 bg-white/10 text-white hover:bg-white/20 transition-colors"
+                  aria-label="Next photo"
+                >
+                  <FaArrowRight className="h-6 w-6" />
+                </button>
+              )}
 
-              {/* Bottom Bar - Additional Info */}
-              <div className="absolute bottom-0 left-0 right-0 z-20 p-4 bg-gradient-to-t from-black/80 to-transparent">
-                <div className="flex items-center justify-between text-white">
-                  <div className="flex items-center gap-4">
-                    {selectedPhoto.matchScore !== undefined && (
-                      <div className="px-3 py-1.5 bg-emerald-900/30 backdrop-blur-sm rounded-lg border border-emerald-700/50">
-                        <p className="text-xs text-emerald-300">
-                          Match: {Math.round((selectedPhoto.confidence || selectedPhoto.matchScore) * 100)}%
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-xs text-slate-400">
-                    Use arrow keys to navigate • ESC to close
-                  </div>
-                </div>
-              </div>
+              {/* Image */}
+              <img
+                src={selectedPhoto.url || selectedPhoto.cloudinaryPublicId || ''}
+                alt="Photo preview"
+                className="max-h-[90vh] max-w-[90vw] object-contain shadow-[0_25px_50px_rgba(0,0,0,0.6)]"
+              />
             </motion.div>
           </motion.div>
         )}
@@ -1120,7 +1005,7 @@ const ViewPhotos = () => {
             >
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-xl font-semibold text-white">
-                  {userMatchedPhotos.length > 0 ? 'Change Your Photo' : 'Upload Your Photo'}
+                  {isChangePhotoFlow ? 'Change Your Photo' : 'Upload Your Photo'}
                 </h3>
                 <button
                   onClick={() => setShowUploadModal(false)}
@@ -1129,24 +1014,21 @@ const ViewPhotos = () => {
                   <FaTimes className="h-5 w-5" />
                 </button>
               </div>
-              {userMatchedPhotos.length > 0 && (
-                <p className="text-sm text-slate-400 mb-4">
-                  Upload a new photo to update your matches. This will replace your current matched photos.
-                </p>
-              )}
 
               <p className="text-slate-400 mb-4">
-                Upload a clear photo of yourself to find all photos containing your face.
+                {isChangePhotoFlow
+                  ? 'Replace your existing selfie to refresh the matches list. Only your latest upload will be used for face detection.'
+                  : 'Upload a clear photo of yourself to find all photos containing your face.'}
               </p>
 
               <div className="bg-slate-700 rounded-lg p-4 mb-6">
-                <h4 className="text-white font-medium mb-2">📸 Tips for better face detection:</h4>
-                <ul className="text-slate-300 text-sm space-y-1">
-                  <li>• Use good lighting (avoid shadows on your face)</li>
-                  <li>• Look directly at the camera</li>
-                  <li>• Make sure your face is clearly visible</li>
-                  <li>• Avoid sunglasses or face coverings</li>
-                  <li>• Use a high-quality photo</li>
+                <h4 className="text-white font-medium mb-2">Tips for better face detection</h4>
+                <ul className="text-slate-300 text-sm space-y-1 list-disc list-inside">
+                  <li>Use good lighting and avoid harsh shadows</li>
+                  <li>Look directly at the camera</li>
+                  <li>Keep your face fully visible</li>
+                  <li>Avoid sunglasses or face coverings</li>
+                  <li>Start with a high-quality photo</li>
                 </ul>
               </div>
 

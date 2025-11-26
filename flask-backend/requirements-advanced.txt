@@ -22,11 +22,11 @@ matplotlib>=3.5.0
 # Performance optimization
 numba>=0.56.0
 
-# System monitoring (optional, for health checks)
-psutil>=5.9.0
-
 # Cloudinary for image management
 cloudinary>=1.36.0
+
+# Production WSGI server (for Render, Railway, etc.)
+gunicorn>=20.1.0
 
 # Optional: GPU acceleration (if CUDA available)
 # torch>=1.12.0

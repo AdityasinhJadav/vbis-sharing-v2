@@ -590,6 +590,37 @@ cd frontend && npm test
 
 ## 🚀 Deployment
 
+**📖 For detailed deployment instructions, see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)**
+
+### 🆓 FREE Deployment (Recommended for Testing)
+
+**Deploy completely FREE using free tiers!**
+
+- Frontend → [Vercel](https://vercel.com) (free - unlimited)
+- Backend → [Render](https://render.com) (free tier)
+- Flask → Render (free tier)
+- MongoDB → [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) (free M0 cluster)
+
+**👉 See [FREE_DEPLOYMENT.md](FREE_DEPLOYMENT.md) for step-by-step FREE deployment guide!**
+
+**Quick Checklist**: [DEPLOY_FREE_QUICK.md](DEPLOY_FREE_QUICK.md)
+
+### 💰 Paid Deployment Options
+
+1. **Easiest (Recommended for beginners)**: 
+   - Frontend → [Vercel](https://vercel.com) (free)
+   - Backend → [Railway](https://railway.app) or [Render](https://render.com)
+   - Flask → Railway/Render (separate service)
+   - MongoDB → [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) (free tier)
+
+2. **Docker Deployment**:
+   ```bash
+   # Create .env file with all required variables
+   docker-compose up -d --build
+   ```
+
+3. **Full Server Deployment**: See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed instructions
+
 ### Production Deployment Checklist
 
 - [ ] Set production environment variables
@@ -600,18 +631,13 @@ cd frontend && npm test
 - [ ] Configure backup strategies
 - [ ] Set up CI/CD pipeline
 
-### Docker Deployment (Optional)
+### Docker Files Included
 
-```dockerfile
-# Example Dockerfile for backend
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
-EXPOSE 4000
-CMD ["npm", "start"]
-```
+This project includes Dockerfiles and docker-compose.yml for easy deployment:
+- `backend/Dockerfile` - Node.js backend
+- `flask-backend/Dockerfile` - Flask face recognition service
+- `frontend/Dockerfile` - React frontend with Nginx
+- `docker-compose.yml` - Complete stack orchestration
 
 ## 🤝 Contributing
 

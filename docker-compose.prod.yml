@@ -1,0 +1,40 @@
+# Production Docker Compose configuration
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+services:
+  backend:
+    environment:
+      - NODE_ENV=production
+    # Remove volume mounts for production (use cloud storage)
+    volumes: []
+    # Add resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  flask:
+    environment:
+      - FLASK_ENV=production
+      - FLASK_DEBUG=0
+    # Add resource limits (Flask needs more memory for ML models)
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  frontend:
+    # Production nginx config with SSL
+    # Note: SSL should be handled by reverse proxy (nginx, traefik, etc.)
+    restart: always
+
